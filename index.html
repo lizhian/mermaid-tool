@@ -249,6 +249,37 @@
             }
         };
 
+        // --- App Namespace (Core Logic) ---
+        const App = {
+            init: async function() {
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: 'default',
+                    flowchart: { useMaxWidth: true, curve: 'basis' },
+                    securityLevel: 'loose'
+                });
+
+                await initTabs();
+                initS3();
+                initUIConfig();
+                initResizeDrag();
+                initEditor();
+                bindEvents();
+                initPanZoom();
+                renderMermaid();
+
+                await tryAutoLoadLastFile();
+
+                if (!state.isAutoSaveSetup) {
+                    setupAutoSave();
+                    state.isAutoSaveSetup = true;
+                }
+
+                updateFooterUI();
+                setInterval(updateSaveTimeDisplay, 60000);
+            }
+        };
+
         const INITIAL_CODE = `flowchart TD
     A(Christmas) -->|Get money| B(Go shopping)
     B --> C(Let me think)
@@ -385,37 +416,7 @@
         }
 
         // --- Initialization ---
-        document.addEventListener('DOMContentLoaded', async function () {
-            mermaid.initialize({
-                startOnLoad: false,
-                theme: 'default',
-                flowchart: { useMaxWidth: true, curve: 'basis' },
-                securityLevel: 'loose'
-            });
-
-            await initTabs();
-            initS3();
-            initUIConfig();
-            initResizeDrag();
-            initEditor();
-            bindEvents();
-            initPanZoom();
-            renderMermaid();
-
-            // Auto-load last file if configured
-            await tryAutoLoadLastFile();
-
-            // Setup Auto Save (Idle)
-            if (!state.isAutoSaveSetup) {
-                setupAutoSave();
-                state.isAutoSaveSetup = true;
-            }
-
-            updateFooterUI();
-
-            // Start Save Time Updater
-            setInterval(updateSaveTimeDisplay, 60000);
-        });
+        document.addEventListener('DOMContentLoaded', App.init);
 
         function updateSaveTimeDisplay() {
             const el = document.getElementById('lastSavedTime');

@@ -522,7 +522,7 @@
                             }
                         };
                         
-                        showNotificationWithAction('请验证本地文件夹访问权限', verifyBtn);
+                        UI.showNotificationWithAction('请验证本地文件夹访问权限', verifyBtn);
                         return; // Stop auto-load until verified
                     }
                 }
@@ -538,23 +538,7 @@
             }
         }
 
-        function showNotificationWithAction(msg, actionBtn) {
-            const notification = document.createElement('div');
-            notification.className = `fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center transition-opacity duration-300`;
-            notification.innerHTML = `<span>${msg}</span>`;
-            notification.appendChild(actionBtn);
-            
-            // Add close button
-            const close = document.createElement('button');
-            close.innerHTML = '<i class="fas fa-times"></i>';
-            close.className = 'ml-3 text-blue-200 hover:text-white';
-            close.onclick = () => notification.remove();
-            notification.appendChild(close);
 
-            document.body.appendChild(notification);
-            
-            // Auto hide after 10s? No, let it stick if it requires action
-        }
 
         async function initTabs() {
             try {
@@ -810,6 +794,21 @@
                         }
                     };
                 });
+            },
+            
+            showNotificationWithAction: function(msg, actionBtn) {
+                const notification = document.createElement('div');
+                notification.className = `fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center transition-opacity duration-300`;
+                notification.innerHTML = `<span>${msg}</span>`;
+                notification.appendChild(actionBtn);
+                
+                const close = document.createElement('button');
+                close.innerHTML = '<i class="fas fa-times"></i>';
+                close.className = 'ml-3 text-blue-200 hover:text-white';
+                close.onclick = () => notification.remove();
+                notification.appendChild(close);
+
+                document.body.appendChild(notification);
             },
             
             openSettings: function() {
@@ -1754,74 +1753,8 @@
         }
 
         // --- Helpers ---
-        function showConfirm(message, options = {}) {
-            return new Promise((resolve) => {
-                const modal = document.getElementById('customConfirmModal');
-                const titleEl = document.getElementById('confirmTitle');
-                const msgEl = document.getElementById('confirmMessage');
-                const okBtn = document.getElementById('confirmOkBtn');
-                const cancelBtn = document.getElementById('confirmCancelBtn');
-
-                titleEl.textContent = options.title || '确认';
-                msgEl.textContent = message;
-
-                if (options.danger) {
-                    okBtn.className = 'px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition';
-                } else {
-                    okBtn.className = 'px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition';
-                }
-
-                const close = (result) => {
-                    modal.classList.add('hidden');
-                    okBtn.onclick = null;
-                    cancelBtn.onclick = null;
-                    resolve(result);
-                };
-
-                okBtn.onclick = () => close(true);
-                cancelBtn.onclick = () => close(false);
-
-                modal.classList.remove('hidden');
-            });
-        }
-
-        function showPrompt(title, defaultValue = '') {
-            return new Promise((resolve) => {
-                const modal = document.getElementById('customPromptModal');
-                const titleEl = document.getElementById('promptTitle');
-                const inputEl = document.getElementById('promptInput');
-                const okBtn = document.getElementById('promptOkBtn');
-                const cancelBtn = document.getElementById('promptCancelBtn');
-
-                titleEl.textContent = title;
-                inputEl.value = defaultValue;
-
-                const close = (value) => {
-                    modal.classList.add('hidden');
-                    okBtn.onclick = null;
-                    cancelBtn.onclick = null;
-                    inputEl.onkeydown = null;
-                    resolve(value);
-                };
-
-                const submit = () => {
-                    const val = inputEl.value.trim();
-                    if (val) close(val);
-                };
-
-                okBtn.onclick = submit;
-                cancelBtn.onclick = () => close(null);
-
-                inputEl.onkeydown = (e) => {
-                    if (e.key === 'Enter') submit();
-                    if (e.key === 'Escape') close(null);
-                };
-
-                modal.classList.remove('hidden');
-                setTimeout(() => inputEl.focus(), 100);
-            });
-        }
-
+        // showConfirm and showPrompt moved to UI namespace
+        
         function setupAutoScrollHide(el) {
             let timeout;
             el.addEventListener('scroll', () => {
@@ -2442,37 +2375,7 @@
             errorDiv.classList.remove('hidden');
         }
 
-        function showNotification(message, type = 'info') {
-            const existingNotification = document.getElementById('copyNotification');
-            if (existingNotification) existingNotification.remove();
 
-            const notification = document.createElement('div');
-            notification.id = 'copyNotification';
-            notification.className = `fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center space-x-3 transition-all duration-300 transform translate-y-0 opacity-100 ${type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' :
-                type === 'error' ? 'bg-red-50 border border-red-200 text-red-800' :
-                    'bg-blue-50 border border-blue-200 text-blue-800'
-                }`;
-
-            const icon = document.createElement('i');
-            icon.className = type === 'success' ? 'fas fa-check-circle text-green-500' :
-                type === 'error' ? 'fas fa-exclamation-circle text-red-500' : 'fas fa-info-circle text-blue-500';
-
-            const messageSpan = document.createElement('span');
-            messageSpan.className = 'font-medium';
-            messageSpan.textContent = message;
-
-            notification.appendChild(icon);
-            notification.appendChild(messageSpan);
-            document.body.appendChild(notification);
-
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.style.opacity = '0';
-                    notification.style.transform = 'translateY(-20px)';
-                    setTimeout(() => notification.remove(), 300);
-                }
-            }, 3000);
-        }
 
 
 

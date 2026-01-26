@@ -700,11 +700,116 @@
         // --- UI Namespace ---
         const UI = {
             showNotification: function(msg, type = 'info') {
-                // Implementation (to be moved from global)
-                // For now, we wrap the global one or move logic here.
-                // To keep it simple and safe for this step, we'll assign the existing function
-                // or just define the namespace and migrate slowly.
-                // Let's stick to the user request: "Group UI related functions".
+                const notification = document.createElement('div');
+                const colors = {
+                    info: 'bg-blue-500',
+                    success: 'bg-green-500',
+                    error: 'bg-red-500',
+                    warning: 'bg-yellow-500'
+                };
+                const colorClass = colors[type] || colors.info;
+
+                notification.className = `fixed bottom-4 right-4 ${colorClass} text-white px-4 py-2 rounded shadow-lg z-50 flex items-center transition-opacity duration-300 opacity-0 transform translate-y-2`;
+                notification.innerHTML = `
+                    <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'} mr-2"></i>
+                    <span>${msg}</span>
+                `;
+
+                document.body.appendChild(notification);
+
+                // Animation
+                requestAnimationFrame(() => {
+                    notification.classList.remove('opacity-0', 'translate-y-2');
+                });
+
+                setTimeout(() => {
+                    notification.classList.add('opacity-0', 'translate-y-2');
+                    setTimeout(() => notification.remove(), 300);
+                }, 3000);
+            },
+
+            showConfirm: function(message, options = {}) {
+                return new Promise((resolve) => {
+                    const modal = document.getElementById('customConfirmModal');
+                    const titleEl = document.getElementById('confirmTitle');
+                    const msgEl = document.getElementById('confirmMessage');
+                    const okBtn = document.getElementById('confirmOkBtn');
+                    const cancelBtn = document.getElementById('confirmCancelBtn');
+
+                    titleEl.textContent = options.title || '确认';
+                    msgEl.textContent = message;
+
+                    if (options.danger) {
+                        okBtn.className = "px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition";
+                        okBtn.textContent = "删除";
+                    } else {
+                        okBtn.className = "px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition";
+                        okBtn.textContent = "确定";
+                    }
+
+                    modal.classList.remove('hidden');
+
+                    const cleanup = () => {
+                        modal.classList.add('hidden');
+                        okBtn.onclick = null;
+                        cancelBtn.onclick = null;
+                    };
+
+                    okBtn.onclick = () => {
+                        cleanup();
+                        resolve(true);
+                    };
+
+                    cancelBtn.onclick = () => {
+                        cleanup();
+                        resolve(false);
+                    };
+                });
+            },
+
+            showPrompt: function(title, defaultValue = '') {
+                return new Promise((resolve) => {
+                    const modal = document.getElementById('customPromptModal');
+                    const titleEl = document.getElementById('promptTitle');
+                    const inputEl = document.getElementById('promptInput');
+                    const okBtn = document.getElementById('promptOkBtn');
+                    const cancelBtn = document.getElementById('promptCancelBtn');
+
+                    titleEl.textContent = title;
+                    inputEl.value = defaultValue;
+
+                    modal.classList.remove('hidden');
+                    inputEl.focus();
+
+                    const cleanup = () => {
+                        modal.classList.add('hidden');
+                        okBtn.onclick = null;
+                        cancelBtn.onclick = null;
+                        inputEl.onkeydown = null;
+                    };
+
+                    const handleOk = () => {
+                        const val = inputEl.value.trim();
+                        cleanup();
+                        if (val) resolve(val);
+                        else resolve(null);
+                    };
+
+                    okBtn.onclick = handleOk;
+
+                    cancelBtn.onclick = () => {
+                        cleanup();
+                        resolve(null);
+                    };
+
+                    inputEl.onkeydown = (e) => {
+                        if (e.key === 'Enter') handleOk();
+                        if (e.key === 'Escape') {
+                            cleanup();
+                            resolve(null);
+                        }
+                    };
+                });
             },
             
             openSettings: function() {
@@ -748,6 +853,11 @@
                 modal.classList.remove('hidden');
             }
         };
+
+        // Backwards compatibility for now (or update all callsites in next step)
+        const showNotification = UI.showNotification;
+        const showConfirm = UI.showConfirm;
+        const showPrompt = UI.showPrompt;
 
         // ... existing code ...
 

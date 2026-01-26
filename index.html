@@ -125,14 +125,135 @@
             }
         }
 
+        class WebDAVStorageProvider extends StorageProvider {
+            constructor(config) {
+                super(config);
+                this.endpoint = config.endpoint ? config.endpoint.replace(/\/$/, '') : '';
+                this.auth = 'Basic ' + btoa((config.username || '') + ':' + (config.password || ''));
+                try {
+                    this.rootPath = new URL(this.endpoint).pathname;
+                    if (!this.rootPath.endsWith('/')) this.rootPath += '/';
+                } catch (e) {
+                    this.rootPath = '/';
+                }
+            }
+
+            _getHeaders() {
+                return { 'Authorization': this.auth };
+            }
+
+            async list(path) {
+                const url = this.endpoint + '/' + (path ? path.replace(/^\//, '') : '');
+                const response = await fetch(url, {
+                    method: 'PROPFIND',
+                    headers: { ...this._getHeaders(), 'Depth': '1' }
+                });
+
+                if (!response.ok) throw new Error(`WebDAV Error: ${response.statusText}`);
+
+                const text = await response.text();
+                const parser = new DOMParser();
+                const xml = parser.parseFromString(text, "text/xml");
+                const responses = Array.from(xml.querySelectorAll('response'));
+                
+                const folders = [];
+                const files = [];
+
+                for (const resp of responses) {
+                    let href = resp.querySelector('href').textContent;
+                    let decodedHref = decodeURIComponent(href);
+                    
+                    let key = decodedHref;
+                    if (key.startsWith('http')) {
+                        key = new URL(key).pathname;
+                    }
+                    if (key.startsWith(this.rootPath)) {
+                        key = key.substring(this.rootPath.length);
+                    }
+                    if (key.startsWith('/')) key = key.substring(1);
+                    
+                    if (key === '' || key === path) continue;
+
+                    const prop = resp.querySelector('propstat prop');
+                    const isCollection = prop.querySelector('collection') !== null || key.endsWith('/');
+                    const lastModStr = prop.querySelector('getlastmodified')?.textContent;
+                    const lengthStr = prop.querySelector('getcontentlength')?.textContent;
+
+                    if (isCollection) {
+                        if (!key.endsWith('/')) key += '/';
+                        folders.push({ Prefix: key });
+                    } else {
+                        files.push({
+                            Key: key,
+                            LastModified: lastModStr ? new Date(lastModStr) : new Date(),
+                            Size: lengthStr ? parseInt(lengthStr) : 0
+                        });
+                    }
+                }
+                return { CommonPrefixes: folders, Contents: files, KeyCount: files.length };
+            }
+
+            async get(key) {
+                const url = this.endpoint + '/' + key;
+                const response = await fetch(url, { method: 'GET', headers: this._getHeaders() });
+                if (!response.ok) throw new Error(`WebDAV Get Error: ${response.status}`);
+                const blob = await response.blob();
+                return {
+                    body: await blob.text(),
+                    lastModified: new Date(response.headers.get('Last-Modified') || Date.now()),
+                    size: blob.size
+                };
+            }
+
+            async put(key, body) {
+                const url = this.endpoint + '/' + key;
+                const response = await fetch(url, {
+                    method: 'PUT',
+                    headers: { ...this._getHeaders(), 'Content-Type': 'text/markdown' },
+                    body: body
+                });
+                if (!response.ok) throw new Error(`WebDAV Put Error: ${response.status}`);
+                return true;
+            }
+
+            async delete(key) {
+                const url = this.endpoint + '/' + key;
+                const response = await fetch(url, { method: 'DELETE', headers: this._getHeaders() });
+                if (!response.ok && response.status !== 404) throw new Error(`WebDAV Delete Error: ${response.status}`);
+                return true;
+            }
+
+            async deleteMany(keys) {
+                for (const k of keys) await this.delete(k.Key || k);
+            }
+
+            async copy(source, target) {
+                const sourceUrl = this.endpoint + '/' + source;
+                const targetUrl = this.endpoint + '/' + target;
+                const response = await fetch(sourceUrl, {
+                    method: 'COPY',
+                    headers: { ...this._getHeaders(), 'Destination': targetUrl, 'Overwrite': 'T' }
+                });
+                if (!response.ok) throw new Error(`WebDAV Copy Error: ${response.status}`);
+            }
+        }
+
         const remoteStorage = {
             provider: null,
             init(config) {
-                if (config) {
+                if (!config) return;
+                if (config.type === 'webdav') {
+                    this.provider = new WebDAVStorageProvider(config);
+                } else {
                     this.provider = new S3StorageProvider(config);
                 }
             },
-            isReady() { return !!this.provider && !!this.provider.client; }
+            isReady() { 
+                if (!this.provider) return false;
+                // S3 requires client, WebDAV just needs config
+                if (this.provider instanceof S3StorageProvider) return !!this.provider.client;
+                return !!this.provider.endpoint;
+            }
         };
 
         const INITIAL_CODE = `flowchart TD
@@ -425,30 +546,44 @@
             state.uiConfig.exportFormat = document.getElementById('uiExportFormat').value;
             saveUIConfig();
             
-            // Update button label dynamically if needed, or just rely on click handler reading state
-            
-            // S3 Config
-            const endpoint = document.getElementById('s3Endpoint').value.trim();
-            const region = document.getElementById('s3Region').value.trim();
-            const accessKeyId = document.getElementById('s3AccessKey').value.trim();
-            const secretAccessKey = document.getElementById('s3SecretKey').value.trim();
-            const bucket = document.getElementById('s3Bucket').value.trim();
+            // Storage Config
+            const type = document.getElementById('storageType').value;
             const maxBackups = parseInt(document.getElementById('s3MaxBackups').value.trim()) || CONSTANTS.DEFAULT_MAX_BACKUPS;
             const enableAutoSave = document.getElementById('s3EnableAutoSave').checked;
             const idleTime = parseInt(document.getElementById('s3IdleTime').value.trim()) || CONSTANTS.DEFAULT_IDLE_TIME;
 
-            if (!accessKeyId || !secretAccessKey || !bucket) {
-                showNotification('请填写必填项 (Access Key, Secret Key, Bucket)', 'error');
-                return;
+            let config = { type, maxBackups, enableAutoSave, idleTime, prefix: '' };
+
+            if (type === 's3') {
+                const endpoint = document.getElementById('s3Endpoint').value.trim();
+                const region = document.getElementById('s3Region').value.trim();
+                const accessKeyId = document.getElementById('s3AccessKey').value.trim();
+                const secretAccessKey = document.getElementById('s3SecretKey').value.trim();
+                const bucket = document.getElementById('s3Bucket').value.trim();
+
+                if (!accessKeyId || !secretAccessKey || !bucket) {
+                    showNotification('请填写必填项 (Access Key, Secret Key, Bucket)', 'error');
+                    return;
+                }
+                config = { ...config, endpoint, region, accessKeyId, secretAccessKey, bucket };
+            } else {
+                const endpoint = document.getElementById('davEndpoint').value.trim();
+                const username = document.getElementById('davUsername').value.trim();
+                const password = document.getElementById('davPassword').value.trim();
+
+                if (!endpoint || !username || !password) {
+                    showNotification('请填写必填项 (Endpoint, Username, Password)', 'error');
+                    return;
+                }
+                config = { ...config, endpoint, username, password };
             }
 
-            // Prefix removed, default to empty
-            state.s3Config = { endpoint, region, accessKeyId, secretAccessKey, bucket, prefix: '', maxBackups, enableAutoSave, idleTime };
+            state.s3Config = config;
             localStorage.setItem(CONSTANTS.S3_CONFIG_KEY, JSON.stringify(state.s3Config));
             updateS3Client();
             
             closeS3ConfigModal();
-            showNotification('S3 配置已保存', 'success');
+            showNotification('存储配置已保存', 'success');
             
             // Re-init auto save with new settings
             setupAutoSave();
@@ -457,32 +592,55 @@
         // --- S3 UI Handlers ---
         function openS3ConfigModal() {
             const modal = document.getElementById('s3ConfigModal');
-            document.querySelector('#s3ConfigModal h3').textContent = '设置'; // Rename Title
+            document.querySelector('#s3ConfigModal h3').textContent = '存储设置';
 
             // Load UI Config
             document.getElementById('uiCopyFormat').value = state.uiConfig.copyFormat || 'png';
             document.getElementById('uiExportFormat').value = state.uiConfig.exportFormat || 'png';
 
-            if (state.s3Config) {
-                document.getElementById('s3Endpoint').value = state.s3Config.endpoint || '';
-                document.getElementById('s3Region').value = state.s3Config.region || '';
-                document.getElementById('s3AccessKey').value = state.s3Config.accessKeyId || '';
-                document.getElementById('s3SecretKey').value = state.s3Config.secretAccessKey || '';
-                document.getElementById('s3Bucket').value = state.s3Config.bucket || '';
-                document.getElementById('s3MaxBackups').value = state.s3Config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
-                
-                const enableAutoSave = state.s3Config.enableAutoSave !== undefined ? state.s3Config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
-                document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
-                document.getElementById('s3IdleTime').value = state.s3Config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
-                
-                toggleIdleTimeInput(enableAutoSave);
-            } else {
-                 document.getElementById('s3MaxBackups').value = CONSTANTS.DEFAULT_MAX_BACKUPS;
-                 document.getElementById('s3EnableAutoSave').checked = CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
-                 document.getElementById('s3IdleTime').value = CONSTANTS.DEFAULT_IDLE_TIME;
-                 toggleIdleTimeInput(CONSTANTS.DEFAULT_ENABLE_AUTOSAVE);
-            }
+            // Load Storage Config
+            const config = state.s3Config || {};
+            const type = config.type || 's3';
+            
+            const typeSelect = document.getElementById('storageType');
+            typeSelect.value = type;
+            // Trigger UI update manually or helper
+            updateStorageFormUI(type);
+
+            // S3 Fields
+            document.getElementById('s3Endpoint').value = config.endpoint || '';
+            document.getElementById('s3Region').value = config.region || '';
+            document.getElementById('s3AccessKey').value = config.accessKeyId || '';
+            document.getElementById('s3SecretKey').value = config.secretAccessKey || '';
+            document.getElementById('s3Bucket').value = config.bucket || '';
+
+            // WebDAV Fields
+            document.getElementById('davEndpoint').value = (type === 'webdav' ? config.endpoint : '') || '';
+            document.getElementById('davUsername').value = config.username || '';
+            document.getElementById('davPassword').value = config.password || '';
+
+            // Common Fields
+            document.getElementById('s3MaxBackups').value = config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
+            
+            const enableAutoSave = config.enableAutoSave !== undefined ? config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
+            document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
+            document.getElementById('s3IdleTime').value = config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
+            
+            toggleIdleTimeInput(enableAutoSave);
+
             modal.classList.remove('hidden');
+        }
+
+        function updateStorageFormUI(type) {
+            const s3 = document.getElementById('s3Fields');
+            const dav = document.getElementById('webdavFields');
+            if (type === 's3') {
+                s3.classList.remove('hidden');
+                dav.classList.add('hidden');
+            } else {
+                s3.classList.add('hidden');
+                dav.classList.remove('hidden');
+            }
         }
 
         function toggleIdleTimeInput(show) {
@@ -2870,33 +3028,67 @@
             </div>
             <div class="p-4 space-y-3">
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
-                    <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    <label class="block text-xs font-medium text-gray-700 mb-1">存储类型</label>
+                    <select id="storageType"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent"
+                        onchange="updateStorageFormUI(this.value)">
+                        <option value="s3">AWS S3 / MinIO / COS / OSS</option>
+                        <option value="webdav">WebDAV (Nextcloud / OwnCloud)</option>
+                    </select>
                 </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
-                    <input id="s3Region" type="text" placeholder="us-east-1"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+
+                <div id="s3Fields" class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
+                        <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
+                        <input id="s3Region" type="text" placeholder="us-east-1"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
+                                class="text-red-500">*</span></label>
+                        <input id="s3AccessKey" type="text"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
+                                class="text-red-500">*</span></label>
+                        <input id="s3SecretKey" type="password"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
+                                class="text-red-500">*</span></label>
+                        <input id="s3Bucket" type="text"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
-                            class="text-red-500">*</span></label>
-                    <input id="s3AccessKey" type="text"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+
+                <div id="webdavFields" class="space-y-3 hidden">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">WebDAV Endpoint <span
+                                class="text-red-500">*</span></label>
+                        <input id="davEndpoint" type="text" placeholder="https://dav.example.com/remote.php/webdav/"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">用户名 <span
+                                class="text-red-500">*</span></label>
+                        <input id="davUsername" type="text"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">密码 <span
+                                class="text-red-500">*</span></label>
+                        <input id="davPassword" type="password"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
-                            class="text-red-500">*</span></label>
-                    <input id="s3SecretKey" type="password"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
-                            class="text-red-500">*</span></label>
-                    <input id="s3Bucket" type="text"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                </div>
+
                 <div class="flex space-x-3">
                     <div class="flex-1">
                         <label class="block text-xs font-medium text-gray-700 mb-1">最大备份数量</label>

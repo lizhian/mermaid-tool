@@ -125,14 +125,128 @@
             }
         }
 
+        class NativeFSProvider extends StorageProvider {
+            constructor(handle) {
+                super({});
+                this.rootHandle = handle;
+            }
+
+            async _resolveHandle(path, create = false) {
+                const parts = path.split('/').filter(p => p);
+                let current = this.rootHandle;
+                
+                for (let i = 0; i < parts.length - 1; i++) {
+                    current = await current.getDirectoryHandle(parts[i], { create });
+                }
+
+                const name = parts[parts.length - 1];
+                if (!name) return current;
+
+                if (path.endsWith('/')) {
+                     return await current.getDirectoryHandle(name, { create });
+                } else {
+                     return await current.getFileHandle(name, { create });
+                }
+            }
+
+            async list(prefix) {
+                let dirHandle = this.rootHandle;
+                let dirPath = prefix || '';
+                
+                if (dirPath && !dirPath.endsWith('/')) {
+                    dirPath += '/';
+                }
+
+                try {
+                    if (dirPath && dirPath !== '/') {
+                        const parts = dirPath.split('/').filter(p => p);
+                        for (const part of parts) {
+                            dirHandle = await dirHandle.getDirectoryHandle(part);
+                        }
+                    }
+                } catch (e) {
+                    return { CommonPrefixes: [], Contents: [] };
+                }
+
+                const folders = [];
+                const files = [];
+
+                for await (const [name, handle] of dirHandle.entries()) {
+                    if (name.startsWith('.')) continue;
+
+                    const key = (dirPath || '') + name;
+
+                    if (handle.kind === 'directory') {
+                         folders.push({ Prefix: key + '/' });
+                    } else {
+                         const file = await handle.getFile();
+                         files.push({
+                             Key: key,
+                             LastModified: new Date(file.lastModified),
+                             Size: file.size
+                         });
+                    }
+                }
+
+                return { CommonPrefixes: folders, Contents: files, KeyCount: files.length };
+            }
+
+            async get(key) {
+                 const handle = await this._resolveHandle(key);
+                 const file = await handle.getFile();
+                 return {
+                     body: await file.text(),
+                     lastModified: new Date(file.lastModified),
+                     size: file.size
+                 };
+            }
+
+            async put(key, body) {
+                 const handle = await this._resolveHandle(key, true);
+                 const writable = await handle.createWritable();
+                 await writable.write(body);
+                 await writable.close();
+            }
+
+            async delete(key) {
+                 const parts = key.split('/').filter(p => p);
+                 const name = parts.pop();
+                 let current = this.rootHandle;
+                 for (const part of parts) {
+                     current = await current.getDirectoryHandle(part);
+                 }
+                 await current.removeEntry(name);
+            }
+
+            async deleteMany(keys) {
+                for (const k of keys) await this.delete(k.Key || k);
+            }
+
+            async copy(source, target) {
+                 const data = await this.get(source);
+                 await this.put(target, data.body);
+            }
+        }
+
         const remoteStorage = {
             provider: null,
             init(config) {
-                if (config) {
+                if (!config) return;
+                if (config.type === 's3') {
                     this.provider = new S3StorageProvider(config);
                 }
+                // Native provider is not auto-initialized from config string alone
+                // It requires a fresh handle via connectLocalFolder
             },
-            isReady() { return !!this.provider && !!this.provider.client; }
+            connectLocalFolder(handle) {
+                this.provider = new NativeFSProvider(handle);
+            },
+            isReady() { 
+                if (!this.provider) return false;
+                if (this.provider instanceof S3StorageProvider) return !!this.provider.client;
+                if (this.provider instanceof NativeFSProvider) return !!this.provider.rootHandle;
+                return false;
+            }
         };
 
         const INITIAL_CODE = `flowchart TD
@@ -425,64 +539,114 @@
             state.uiConfig.exportFormat = document.getElementById('uiExportFormat').value;
             saveUIConfig();
             
-            // Update button label dynamically if needed, or just rely on click handler reading state
-            
-            // S3 Config
-            const endpoint = document.getElementById('s3Endpoint').value.trim();
-            const region = document.getElementById('s3Region').value.trim();
-            const accessKeyId = document.getElementById('s3AccessKey').value.trim();
-            const secretAccessKey = document.getElementById('s3SecretKey').value.trim();
-            const bucket = document.getElementById('s3Bucket').value.trim();
+            // Storage Config
+            const type = document.getElementById('storageType').value;
             const maxBackups = parseInt(document.getElementById('s3MaxBackups').value.trim()) || CONSTANTS.DEFAULT_MAX_BACKUPS;
             const enableAutoSave = document.getElementById('s3EnableAutoSave').checked;
             const idleTime = parseInt(document.getElementById('s3IdleTime').value.trim()) || CONSTANTS.DEFAULT_IDLE_TIME;
 
-            if (!accessKeyId || !secretAccessKey || !bucket) {
-                showNotification('请填写必填项 (Access Key, Secret Key, Bucket)', 'error');
-                return;
+            let config = { type, maxBackups, enableAutoSave, idleTime, prefix: '' };
+
+            if (type === 's3') {
+                const endpoint = document.getElementById('s3Endpoint').value.trim();
+                const region = document.getElementById('s3Region').value.trim();
+                const accessKeyId = document.getElementById('s3AccessKey').value.trim();
+                const secretAccessKey = document.getElementById('s3SecretKey').value.trim();
+                const bucket = document.getElementById('s3Bucket').value.trim();
+
+                if (!accessKeyId || !secretAccessKey || !bucket) {
+                    showNotification('请填写必填项 (Access Key, Secret Key, Bucket)', 'error');
+                    return;
+                }
+                config = { ...config, endpoint, region, accessKeyId, secretAccessKey, bucket };
             }
 
-            // Prefix removed, default to empty
-            state.s3Config = { endpoint, region, accessKeyId, secretAccessKey, bucket, prefix: '', maxBackups, enableAutoSave, idleTime };
+            state.s3Config = config;
             localStorage.setItem(CONSTANTS.S3_CONFIG_KEY, JSON.stringify(state.s3Config));
-            updateS3Client();
+            updateS3Client(); // This only inits S3. Native needs manual connect.
             
             closeS3ConfigModal();
-            showNotification('S3 配置已保存', 'success');
+            showNotification('配置已保存', 'success');
             
-            // Re-init auto save with new settings
             setupAutoSave();
+        }
+
+        async function selectLocalFolder() {
+             if (!window.showDirectoryPicker) {
+                 showNotification('您的浏览器不支持文件夹访问 API', 'error');
+                 return;
+             }
+             try {
+                 const handle = await window.showDirectoryPicker();
+                 remoteStorage.connectLocalFolder(handle);
+                 
+                 // Update UI to show connected
+                 document.getElementById('nativeFolderStatus').textContent = `已连接: ${handle.name}`;
+                 document.getElementById('nativeFolderStatus').className = "text-xs text-green-600 font-medium mt-1";
+                 
+                 // Auto-save type preference
+                 document.getElementById('storageType').value = 'native';
+                 updateStorageFormUI('native');
+                 
+             } catch (e) {
+                 if (e.name !== 'AbortError') {
+                     showNotification('选择文件夹失败: ' + e.message, 'error');
+                 }
+             }
         }
 
         // --- S3 UI Handlers ---
         function openS3ConfigModal() {
             const modal = document.getElementById('s3ConfigModal');
-            document.querySelector('#s3ConfigModal h3').textContent = '设置'; // Rename Title
+            document.querySelector('#s3ConfigModal h3').textContent = '存储配置';
 
             // Load UI Config
             document.getElementById('uiCopyFormat').value = state.uiConfig.copyFormat || 'png';
             document.getElementById('uiExportFormat').value = state.uiConfig.exportFormat || 'png';
 
-            if (state.s3Config) {
-                document.getElementById('s3Endpoint').value = state.s3Config.endpoint || '';
-                document.getElementById('s3Region').value = state.s3Config.region || '';
-                document.getElementById('s3AccessKey').value = state.s3Config.accessKeyId || '';
-                document.getElementById('s3SecretKey').value = state.s3Config.secretAccessKey || '';
-                document.getElementById('s3Bucket').value = state.s3Config.bucket || '';
-                document.getElementById('s3MaxBackups').value = state.s3Config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
-                
-                const enableAutoSave = state.s3Config.enableAutoSave !== undefined ? state.s3Config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
-                document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
-                document.getElementById('s3IdleTime').value = state.s3Config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
-                
-                toggleIdleTimeInput(enableAutoSave);
+            const config = state.s3Config || {};
+            const type = config.type || 's3'; // default s3
+            
+            // Set values
+            const typeSelect = document.getElementById('storageType');
+            typeSelect.value = type;
+            updateStorageFormUI(type);
+
+            document.getElementById('s3Endpoint').value = config.endpoint || '';
+            document.getElementById('s3Region').value = config.region || '';
+            document.getElementById('s3AccessKey').value = config.accessKeyId || '';
+            document.getElementById('s3SecretKey').value = config.secretAccessKey || '';
+            document.getElementById('s3Bucket').value = config.bucket || '';
+
+            document.getElementById('s3MaxBackups').value = config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
+            const enableAutoSave = config.enableAutoSave !== undefined ? config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
+            document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
+            document.getElementById('s3IdleTime').value = config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
+            toggleIdleTimeInput(enableAutoSave);
+            
+            // Native status
+            const statusEl = document.getElementById('nativeFolderStatus');
+            if (remoteStorage.provider instanceof NativeFSProvider && remoteStorage.provider.rootHandle) {
+                 statusEl.textContent = `已连接: ${remoteStorage.provider.rootHandle.name}`;
+                 statusEl.className = "text-xs text-green-600 font-medium mt-1";
             } else {
-                 document.getElementById('s3MaxBackups').value = CONSTANTS.DEFAULT_MAX_BACKUPS;
-                 document.getElementById('s3EnableAutoSave').checked = CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
-                 document.getElementById('s3IdleTime').value = CONSTANTS.DEFAULT_IDLE_TIME;
-                 toggleIdleTimeInput(CONSTANTS.DEFAULT_ENABLE_AUTOSAVE);
+                 statusEl.textContent = "未连接";
+                 statusEl.className = "text-xs text-gray-400 mt-1";
             }
+
             modal.classList.remove('hidden');
+        }
+        
+        function updateStorageFormUI(type) {
+            const s3 = document.getElementById('s3Fields');
+            const native = document.getElementById('nativeFields');
+            if (type === 's3') {
+                s3.classList.remove('hidden');
+                native.classList.add('hidden');
+            } else {
+                s3.classList.add('hidden');
+                native.classList.remove('hidden');
+            }
         }
 
         function toggleIdleTimeInput(show) {
@@ -2870,34 +3034,63 @@
             </div>
             <div class="p-4 space-y-3">
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
-                    <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    <label class="block text-xs font-medium text-gray-700 mb-1">存储类型</label>
+                    <select id="storageType"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent"
+                        onchange="updateStorageFormUI(this.value)">
+                        <option value="s3">AWS S3 / MinIO / OSS</option>
+                        <option value="native">本地文件夹同步 (Native File System)</option>
+                    </select>
                 </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
-                    <input id="s3Region" type="text" placeholder="us-east-1"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+
+                <!-- S3 Fields -->
+                <div id="s3Fields">
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
+                            <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
+                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
+                            <input id="s3Region" type="text" placeholder="us-east-1"
+                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
+                                    class="text-red-500">*</span></label>
+                            <input id="s3AccessKey" type="text"
+                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
+                                    class="text-red-500">*</span></label>
+                            <input id="s3SecretKey" type="password"
+                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
+                                    class="text-red-500">*</span></label>
+                            <input id="s3Bucket" type="text"
+                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                        </div>
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
-                            class="text-red-500">*</span></label>
-                    <input id="s3AccessKey" type="text"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+
+                <!-- Native Fields -->
+                <div id="nativeFields" class="hidden">
+                    <div class="bg-gray-50 border border-gray-200 rounded p-3 text-center">
+                        <p class="text-xs text-gray-600 mb-2">选择一个本地文件夹作为存储桶。文件将直接读写到您的硬盘。</p>
+                        <button onclick="selectLocalFolder()"
+                            class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-100 px-3 py-1.5 rounded text-xs font-medium transition shadow-sm">
+                            <i class="fas fa-folder-open mr-1 text-yellow-500"></i>
+                            选择/连接 文件夹
+                        </button>
+                        <div id="nativeFolderStatus" class="text-xs text-gray-400 mt-1">未连接</div>
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
-                            class="text-red-500">*</span></label>
-                    <input id="s3SecretKey" type="password"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                </div>
-                <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
-                            class="text-red-500">*</span></label>
-                    <input id="s3Bucket" type="text"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                </div>
-                <div class="flex space-x-3">
+
+                <div class="flex space-x-3 mt-3">
                     <div class="flex-1">
                         <label class="block text-xs font-medium text-gray-700 mb-1">最大备份数量</label>
                         <input id="s3MaxBackups" type="number" min="1" max="100" value="10"
@@ -2915,7 +3108,7 @@
                         class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
                 </div>
                 <div class="text-xs text-yellow-600 bg-yellow-50 p-2 rounded border border-yellow-200">
-                    <i class="fas fa-exclamation-triangle mr-1"></i> 注意：密钥将保存在浏览器本地存储中，请勿在公共设备上使用。
+                    <i class="fas fa-exclamation-triangle mr-1"></i> 注意：密钥/权限仅保存在浏览器会话或本地存储中。
                 </div>
                 
                 <div class="border-t border-gray-200 pt-3 mt-3">

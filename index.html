@@ -30,8 +30,9 @@
             MIN_ZOOM: 0.3,
             MAX_ZOOM: 5,
             DB_NAME: 'MermaidEditorDB',
-            DB_VERSION: 1,
+            DB_VERSION: 2,
             STORE_NAME: 'tabs',
+            HANDLE_STORE_NAME: 'handles',
             S3_CONFIG_KEY: 'mermaid_editor_s3_config',
             LAST_FILE_KEY: 'mermaid_editor_last_file',
             DEFAULT_MAX_BACKUPS: 10,
@@ -388,7 +389,39 @@
                         const store = database.createObjectStore(CONSTANTS.STORE_NAME, { keyPath: 'id' });
                         store.createIndex('name', 'name', { unique: false });
                     }
+                    if (!database.objectStoreNames.contains(CONSTANTS.HANDLE_STORE_NAME)) {
+                        database.createObjectStore(CONSTANTS.HANDLE_STORE_NAME, { keyPath: 'id' });
+                    }
                 };
+            });
+        }
+
+        function saveHandleToDB(handle) {
+            if (!db) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([CONSTANTS.HANDLE_STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(CONSTANTS.HANDLE_STORE_NAME);
+                const request = store.put({ id: 'root', handle: handle });
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        function loadHandleFromDB() {
+            if (!db) return Promise.resolve(null);
+            return new Promise((resolve, reject) => {
+                try {
+                    const transaction = db.transaction([CONSTANTS.HANDLE_STORE_NAME], 'readonly');
+                    const store = transaction.objectStore(CONSTANTS.HANDLE_STORE_NAME);
+                    const request = store.get('root');
+                    request.onsuccess = () => resolve(request.result ? request.result.handle : null);
+                    request.onerror = () => {
+                        console.warn("Failed to load handle from DB (store might not exist yet)");
+                        resolve(null);
+                    };
+                } catch(e) {
+                    resolve(null);
+                }
             });
         }
 
@@ -461,17 +494,39 @@
             if (!lastFileKey) return;
 
             // If not ready (e.g. Native FS needs manual reconnect), skip auto-load
+            // BUT: If it IS ready (handle restored), we might still need permission check
             if (!remoteStorage.isReady()) {
                 if (state.s3Config && state.s3Config.type === 'native') {
-                    console.log('Skipping auto-load for Native FS (requires manual reconnect)');
-                    // Optional: Show a hint to the user?
-                    // showNotification('请重新连接本地文件夹以恢复工作', 'info');
+                    console.log('Native FS not ready (handle missing)');
                 }
                 return;
             }
 
             if (state.s3Config) {
                 console.log('Attempting to restore last session:', lastFileKey);
+                
+                // Permission Check for Native FS
+                if (state.s3Config.type === 'native' && remoteStorage.provider.rootHandle) {
+                    const handle = remoteStorage.provider.rootHandle;
+                    const opts = { mode: 'readwrite' };
+                    if ((await handle.queryPermission(opts)) !== 'granted') {
+                        // We can't request permission here (no gesture).
+                        // Show a notification asking user to verify.
+                        const verifyBtn = document.createElement('button');
+                        verifyBtn.textContent = '验证权限';
+                        verifyBtn.className = 'bg-white text-primary px-2 py-1 rounded ml-2 border border-primary text-xs';
+                        verifyBtn.onclick = async () => {
+                            if ((await handle.requestPermission(opts)) === 'granted') {
+                                showNotification('权限已验证，正在加载...', 'success');
+                                tryAutoLoadLastFile(); // Retry
+                            }
+                        };
+                        
+                        showNotificationWithAction('请验证本地文件夹访问权限', verifyBtn);
+                        return; // Stop auto-load until verified
+                    }
+                }
+
                 try {
                     await loadS3File(lastFileKey, true); // true = silent/init mode
                 } catch (e) {
@@ -481,6 +536,24 @@
                     localStorage.removeItem(CONSTANTS.LAST_FILE_KEY);
                 }
             }
+        }
+
+        function showNotificationWithAction(msg, actionBtn) {
+            const notification = document.createElement('div');
+            notification.className = `fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center transition-opacity duration-300`;
+            notification.innerHTML = `<span>${msg}</span>`;
+            notification.appendChild(actionBtn);
+            
+            // Add close button
+            const close = document.createElement('button');
+            close.innerHTML = '<i class="fas fa-times"></i>';
+            close.className = 'ml-3 text-blue-200 hover:text-white';
+            close.onclick = () => notification.remove();
+            notification.appendChild(close);
+
+            document.body.appendChild(notification);
+            
+            // Auto hide after 10s? No, let it stick if it requires action
         }
 
         async function initTabs() {
@@ -534,11 +607,25 @@
         }
 
         // --- S3 System ---
-        function initS3() {
+        async function initS3() {
             const savedConfig = localStorage.getItem(CONSTANTS.S3_CONFIG_KEY);
             if (savedConfig) {
                 state.s3Config = JSON.parse(savedConfig);
-                updateS3Client();
+                
+                if (state.s3Config.type === 'native') {
+                    // Try to restore handle from DB
+                    try {
+                        const handle = await loadHandleFromDB();
+                        if (handle) {
+                            remoteStorage.connectLocalFolder(handle);
+                            console.log("Restored Native FS handle from DB");
+                        }
+                    } catch(e) {
+                        console.error("Failed to restore native handle", e);
+                    }
+                } else {
+                    updateS3Client();
+                }
             }
         }
 
@@ -593,6 +680,7 @@
              try {
                  const handle = await window.showDirectoryPicker();
                  remoteStorage.connectLocalFolder(handle);
+                 await saveHandleToDB(handle);
                  
                  // Update UI to show connected
                  document.getElementById('nativeFolderStatus').textContent = `已连接: ${handle.name}`;

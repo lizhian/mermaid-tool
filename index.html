@@ -8,6 +8,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.1.0/diff.min.js"></script>
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1001.0.min.js"></script>
     <script>
         // --- Configuration & Constants ---
         tailwind.config = {
@@ -29,7 +31,12 @@
             MAX_ZOOM: 5,
             DB_NAME: 'MermaidEditorDB',
             DB_VERSION: 1,
-            STORE_NAME: 'tabs'
+            STORE_NAME: 'tabs',
+            S3_CONFIG_KEY: 'mermaid_editor_s3_config',
+            LAST_FILE_KEY: 'mermaid_editor_last_file',
+            DEFAULT_MAX_BACKUPS: 10,
+            DEFAULT_IDLE_TIME: 1, // minutes
+            DEFAULT_ENABLE_AUTOSAVE: true
         };
 
         const INITIAL_CODE = `flowchart TD
@@ -64,10 +71,64 @@
                 startY: 0,
                 animationFrameId: null
             },
-            draggedTabId: null
+            draggedTabId: null,
+            s3Config: null,
+            currentFile: {
+                type: 'local', // 'local' | 's3'
+                key: null,
+                backupCount: 0
+            },
+            lastSavedContent: '', // For change detection
+            s3BrowserPath: '', // For file browsing
+            isSavingMode: false,
+            autoSaveTimer: null,
+            isRenderError: false,
+            lastSaveTime: null
         };
 
         let db = null;
+
+
+        function timeAgo(date) {
+            const now = new Date();
+            const diffMs = now - date;
+            const diffSec = Math.floor(diffMs / 1000);
+            const diffMin = Math.floor(diffSec / 60);
+            const diffHour = Math.floor(diffMin / 60);
+            const diffDay = Math.floor(diffHour / 24);
+
+            if (diffSec < 60) {
+                return '刚刚';
+            } else if (diffMin < 60) {
+                return `${diffMin}分钟前`;
+            } else if (diffHour < 24) {
+                return `${diffHour}小时前`;
+            } else {
+                return `${diffDay}天前`;
+            }
+        }
+
+        async function getBackupCount(key) {
+             if (!state.s3Config) return 0;
+             const s3 = new AWS.S3();
+             const backupPrefix = key.replace('.md', '/');
+             try {
+                  // _filename/ prefix may match folders starting with same name, strictly we might want _filename/
+                  // But our convention is folder/_filename/
+                  // Actually the backup folder is defined as:
+                  const pathParts = key.split('/');
+                  const filename = pathParts.pop();
+                  const dir = pathParts.join('/');
+                  const filenameNoExt = filename.replace('.md', '');
+                  const backupDir = (dir ? dir + '/' : '') + '_' + filenameNoExt + '/';
+                  
+                  const data = await s3.listObjectsV2({ Bucket: state.s3Config.bucket, Prefix: backupDir }).promise();
+                  return data.KeyCount || 0;
+             } catch (e) {
+                 console.error('Failed to get backup count', e);
+                 return 0;
+             }
+        }
 
         // --- Database Operations ---
         function initDB() {
@@ -123,12 +184,79 @@
             });
 
             await initTabs();
+            initS3();
             initResizeDrag();
             initEditor();
             bindEvents();
             initPanZoom();
             renderMermaid();
+            
+            // Auto-load last file if configured
+            await tryAutoLoadLastFile();
+            
+            // Setup Auto Save (Idle)
+            if (!state.isAutoSaveSetup) {
+                setupAutoSave();
+                state.isAutoSaveSetup = true;
+            }
+            
+            updateFooterUI();
+            
+            // Start Save Time Updater
+            setInterval(updateSaveTimeDisplay, 60000);
         });
+
+        function updateSaveTimeDisplay() {
+            const el = document.getElementById('lastSavedTime');
+            if (!el) return;
+            
+            if (!state.lastSaveTime) {
+                el.textContent = '';
+                return;
+            }
+            
+            el.textContent = '已保存: ' + timeAgo(state.lastSaveTime);
+        }
+
+        function setupAutoSave() {
+            const editor = document.getElementById('mermaidEditor');
+            
+            editor.addEventListener('input', () => {
+                if (state.s3Config && state.currentFile.type === 's3') {
+                     clearTimeout(state.autoSaveTimer);
+                     
+                     // Check if auto-save is enabled
+                     if (state.s3Config.enableAutoSave === false) return;
+                     
+                     const delay = (state.s3Config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME) * 60 * 1000;
+                     
+                     state.autoSaveTimer = setTimeout(() => {
+                         // Auto-save triggered
+                         if (state.isRenderError) {
+                             console.log('Skipping auto-save due to render error');
+                             return;
+                         }
+                         console.log('Auto-save triggered after idle');
+                         handleSave(true); // silent save
+                     }, delay);
+                }
+            });
+        }
+
+
+        async function tryAutoLoadLastFile() {
+            const lastFileKey = localStorage.getItem(CONSTANTS.LAST_FILE_KEY);
+            if (lastFileKey && state.s3Config) {
+                console.log('Attempting to restore last session:', lastFileKey);
+                // We reuse loadS3File logic but need to be careful about UI feedback during init
+                try {
+                     await loadS3File(lastFileKey, true); // true = silent/init mode
+                } catch (e) {
+                    console.error('Failed to auto-load last file', e);
+                    localStorage.removeItem(CONSTANTS.LAST_FILE_KEY);
+                }
+            }
+        }
 
         async function initTabs() {
             try {
@@ -162,6 +290,845 @@
                 state.activeTabId = state.tabs[0].id;
                 renderTabs();
             }
+        }
+
+        // --- S3 System ---
+        function initS3() {
+            const savedConfig = localStorage.getItem(CONSTANTS.S3_CONFIG_KEY);
+            if (savedConfig) {
+                state.s3Config = JSON.parse(savedConfig);
+                updateS3Client();
+            }
+        }
+
+        function updateS3Client() {
+            if (!state.s3Config) return;
+            
+            AWS.config.update({
+                accessKeyId: state.s3Config.accessKeyId,
+                secretAccessKey: state.s3Config.secretAccessKey,
+                region: state.s3Config.region,
+                endpoint: state.s3Config.endpoint,
+                s3ForcePathStyle: true // Needed for MinIO and some compatible services
+            });
+        }
+
+        async function saveS3Config() {
+            const endpoint = document.getElementById('s3Endpoint').value.trim();
+            const region = document.getElementById('s3Region').value.trim();
+            const accessKeyId = document.getElementById('s3AccessKey').value.trim();
+            const secretAccessKey = document.getElementById('s3SecretKey').value.trim();
+            const bucket = document.getElementById('s3Bucket').value.trim();
+            const maxBackups = parseInt(document.getElementById('s3MaxBackups').value.trim()) || CONSTANTS.DEFAULT_MAX_BACKUPS;
+            const enableAutoSave = document.getElementById('s3EnableAutoSave').checked;
+            const idleTime = parseInt(document.getElementById('s3IdleTime').value.trim()) || CONSTANTS.DEFAULT_IDLE_TIME;
+
+            if (!accessKeyId || !secretAccessKey || !bucket) {
+                showNotification('请填写必填项 (Access Key, Secret Key, Bucket)', 'error');
+                return;
+            }
+
+            // Prefix removed, default to empty
+            state.s3Config = { endpoint, region, accessKeyId, secretAccessKey, bucket, prefix: '', maxBackups, enableAutoSave, idleTime };
+            localStorage.setItem(CONSTANTS.S3_CONFIG_KEY, JSON.stringify(state.s3Config));
+            updateS3Client();
+            
+            closeS3ConfigModal();
+            showNotification('S3 配置已保存', 'success');
+            
+            // Re-init auto save with new settings
+            setupAutoSave();
+        }
+
+        // --- S3 UI Handlers ---
+        function openS3ConfigModal() {
+            const modal = document.getElementById('s3ConfigModal');
+            if (state.s3Config) {
+                document.getElementById('s3Endpoint').value = state.s3Config.endpoint || '';
+                document.getElementById('s3Region').value = state.s3Config.region || '';
+                document.getElementById('s3AccessKey').value = state.s3Config.accessKeyId || '';
+                document.getElementById('s3SecretKey').value = state.s3Config.secretAccessKey || '';
+                document.getElementById('s3Bucket').value = state.s3Config.bucket || '';
+                document.getElementById('s3MaxBackups').value = state.s3Config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
+                
+                const enableAutoSave = state.s3Config.enableAutoSave !== undefined ? state.s3Config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
+                document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
+                document.getElementById('s3IdleTime').value = state.s3Config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
+                
+                toggleIdleTimeInput(enableAutoSave);
+            } else {
+                 document.getElementById('s3MaxBackups').value = CONSTANTS.DEFAULT_MAX_BACKUPS;
+                 document.getElementById('s3EnableAutoSave').checked = CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
+                 document.getElementById('s3IdleTime').value = CONSTANTS.DEFAULT_IDLE_TIME;
+                 toggleIdleTimeInput(CONSTANTS.DEFAULT_ENABLE_AUTOSAVE);
+            }
+            modal.classList.remove('hidden');
+        }
+
+        function toggleIdleTimeInput(show) {
+            const container = document.getElementById('s3IdleTimeContainer');
+            if (show) {
+                container.classList.remove('hidden');
+            } else {
+                container.classList.add('hidden');
+            }
+        }
+
+        async function listS3Files(path = null) {
+            if (!state.s3Config) {
+                openS3ConfigModal();
+                showNotification('请先配置 S3 对象存储', 'info');
+                return;
+            }
+
+            const s3 = new AWS.S3();
+            
+            let currentPath = path !== null ? path : state.s3BrowserPath;
+            if (currentPath && !currentPath.endsWith('/')) currentPath += '/';
+            state.s3BrowserPath = currentPath || '';
+
+            const params = {
+                Bucket: state.s3Config.bucket,
+                Prefix: state.s3BrowserPath,
+                Delimiter: '/'
+            };
+
+            const listContainer = document.getElementById('s3FileList');
+            const breadcrumbs = document.getElementById('s3Breadcrumbs');
+            
+            listContainer.innerHTML = '<div class="text-center text-gray-500 py-4"><i class="fas fa-spinner fa-spin mr-2"></i>加载中...</div>';
+            if (breadcrumbs) breadcrumbs.innerHTML = renderBreadcrumbs(state.s3BrowserPath);
+            
+            document.getElementById('s3ListModal').classList.remove('hidden');
+            
+            // Add Save Button if saving mode
+            let saveAction = document.getElementById('s3BrowserSaveAction');
+            if (!saveAction) {
+                saveAction = document.createElement('div');
+                saveAction.id = 's3BrowserSaveAction';
+                saveAction.className = 'px-4 py-3 border-t border-gray-200 bg-gray-50 flex items-center justify-between hidden';
+                saveAction.innerHTML = `
+                    <div class="flex-1 mr-3">
+                        <input id="s3SaveFilename" type="text" placeholder="输入文件名 (如: my-chart.md)" 
+                            class="w-full border border-gray-300 rounded px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                    <button id="s3ConfirmSaveBtn" class="flex items-center space-x-1 bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
+                        <i class="fas fa-check"></i>
+                        <span>确认保存</span>
+                    </button>
+                `;
+                document.getElementById('s3ListModal').querySelector('.bg-white').appendChild(saveAction);
+                
+                document.getElementById('s3ConfirmSaveBtn').addEventListener('click', confirmS3Save);
+            }
+            
+            if (state.isSavingMode) {
+                saveAction.classList.remove('hidden');
+                document.getElementById('s3SaveFilename').focus();
+            } else {
+                saveAction.classList.add('hidden');
+            }
+
+            try {
+                const data = await s3.listObjectsV2(params).promise();
+                await renderS3Browser(data.CommonPrefixes, data.Contents);
+            } catch (err) {
+                console.error('S3 List Error:', err);
+                listContainer.innerHTML = `<div class="text-center text-red-500 py-4">加载失败: ${err.message}</div>`;
+            }
+        }
+
+        function renderBreadcrumbs(path) {
+            const parts = path.split('/').filter(p => p);
+            let html = `<span class="cursor-pointer hover:text-primary hover:underline" onclick="listS3Files('')">根目录</span>`;
+            let current = '';
+            
+            parts.forEach((part, index) => {
+                current += part + '/';
+                html += ` <span class="text-gray-400">/</span> <span class="cursor-pointer hover:text-primary hover:underline" onclick="listS3Files('${current}')">${part}</span>`;
+            });
+            
+            return html;
+        }
+
+        async function renderS3Browser(folders, files) {
+            const listContainer = document.getElementById('s3FileList');
+            listContainer.innerHTML = '';
+            const s3 = new AWS.S3();
+
+            // Render Folders (Filter out backup folders starting with _)
+            folders.forEach(folder => {
+                const name = folder.Prefix.replace(state.s3BrowserPath, '').replace('/', '');
+                if (!name || name.startsWith('_')) return; // Skip if empty or backup folder
+                
+                const item = document.createElement('div');
+                item.className = 'flex items-center justify-between p-3 hover:bg-gray-50 border-b border-gray-100 last:border-0 group';
+                item.innerHTML = `
+                    <div class="flex items-center space-x-3 cursor-pointer flex-1" onclick="listS3Files('${folder.Prefix}')">
+                        <i class="fas fa-folder text-yellow-400 text-lg"></i>
+                        <span class="text-sm font-medium text-gray-700">${name}</span>
+                    </div>
+                    <div class="hidden group-hover:flex items-center space-x-2">
+                        <button class="text-gray-400 hover:text-blue-600 px-2" title="重命名" onclick="renameS3Item('${folder.Prefix}', true)">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="text-gray-400 hover:text-red-600 px-2" title="删除" onclick="deleteS3Item('${folder.Prefix}', true)">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                `;
+                listContainer.appendChild(item);
+            });
+
+            // Render Files
+            const mdFiles = files.filter(f => f.Key.endsWith('.md') && f.Key !== state.s3BrowserPath).filter(f => {
+                const filename = f.Key.replace(state.s3BrowserPath, '');
+                return !/^\d{8}-\d{6}\.md$/.test(filename);
+            }).sort((a, b) => b.LastModified - a.LastModified);
+
+            for (const file of mdFiles) {
+                const name = file.Key.replace(state.s3BrowserPath, '');
+                const date = new Date(file.LastModified).toLocaleString();
+                const size = (file.Size / 1024).toFixed(1) + ' KB';
+                
+                const item = document.createElement('div');
+                item.className = 'flex items-center justify-between p-3 hover:bg-gray-50 border-b border-gray-100 last:border-0 group';
+                
+                item.innerHTML = `
+                    <div class="flex items-center space-x-3 cursor-pointer flex-1 overflow-hidden" onclick="loadS3File('${file.Key}')">
+                        <i class="fas fa-file-alt text-gray-400 text-lg"></i>
+                        <div class="flex flex-col overflow-hidden">
+                            <span class="text-sm font-medium text-gray-700 truncate" title="${name}">${name}</span>
+                            <div class="flex items-center space-x-2 text-xs text-gray-400">
+                                <span>${date}</span>
+                                <span>·</span>
+                                <span>${size}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="hidden group-hover:flex items-center space-x-2">
+                         <button class="text-gray-400 hover:text-blue-600 px-2" title="重命名" onclick="renameS3Item('${file.Key}', false)">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="text-gray-400 hover:text-red-600 px-2" title="删除" onclick="deleteS3Item('${file.Key}', false)">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                        <button class="text-primary hover:text-indigo-700 px-2 py-1 rounded text-xs font-medium" onclick="loadS3File('${file.Key}')">
+                            加载
+                        </button>
+                    </div>
+                `;
+                listContainer.appendChild(item);
+            }
+            
+            if (folders.length === 0 && mdFiles.length === 0) {
+                 listContainer.innerHTML += '<div class="text-center text-gray-400 py-8">此文件夹为空</div>';
+            }
+        }
+
+        async function createS3Folder() {
+            const name = await showPrompt("请输入文件夹名称:");
+            if (!name) return;
+            const folderKey = (state.s3BrowserPath || '') + name + '/';
+            const s3 = new AWS.S3();
+            try {
+                await s3.putObject({ Bucket: state.s3Config.bucket, Key: folderKey, Body: '' }).promise();
+                listS3Files(state.s3BrowserPath);
+            } catch (err) {
+                showNotification('创建文件夹失败: ' + err.message, 'error');
+            }
+        }
+
+        async function renameS3Item(oldKey, isFolder) {
+            const oldName = oldKey.replace(state.s3BrowserPath, '').replace('/', '');
+            const newName = await showPrompt(`重命名 ${isFolder ? '文件夹' : '文件'}:`, oldName);
+            if (!newName || newName === oldName) return;
+
+            let newKey = state.s3BrowserPath + newName;
+            if (isFolder && !newKey.endsWith('/')) newKey += '/';
+            
+            const s3 = new AWS.S3();
+            try {
+                await s3.copyObject({
+                    Bucket: state.s3Config.bucket,
+                    CopySource: encodeURIComponent(`${state.s3Config.bucket}/${oldKey}`),
+                    Key: newKey
+                }).promise();
+                
+                await s3.deleteObject({ Bucket: state.s3Config.bucket, Key: oldKey }).promise();
+                
+                if (isFolder) {
+                    showNotification('注意: 仅重命名了文件夹本身，其中的文件未移动 (S3 限制)', 'warning');
+                }
+                
+                listS3Files(state.s3BrowserPath);
+                showNotification('重命名成功', 'success');
+            } catch (err) {
+                showNotification('重命名失败: ' + err.message, 'error');
+            }
+        }
+
+        async function deleteS3Item(key, isFolder) {
+            if (!await showConfirm(`确定要删除 ${isFolder ? '文件夹' : '文件'} "${key}" 吗?`, { title: '删除确认', danger: true })) return;
+            const s3 = new AWS.S3();
+            try {
+                const objectsToDelete = [{ Key: key }];
+                
+                if (!isFolder) {
+                    const backupPrefix = key.replace('.md', '/');
+                    const backupList = await s3.listObjectsV2({ Bucket: state.s3Config.bucket, Prefix: backupPrefix }).promise();
+                    if (backupList.Contents) {
+                        backupList.Contents.forEach(c => objectsToDelete.push({ Key: c.Key }));
+                    }
+                }
+
+                if (objectsToDelete.length > 0) {
+                     await s3.deleteObjects({
+                        Bucket: state.s3Config.bucket,
+                        Delete: { Objects: objectsToDelete }
+                    }).promise();
+                }
+
+                listS3Files(state.s3BrowserPath);
+                showNotification('删除成功', 'success');
+            } catch (err) {
+                showNotification('删除失败: ' + err.message, 'error');
+            }
+        }
+
+        function generateMarkdown() {
+            let markdown = '';
+            state.tabs.forEach(tab => {
+                markdown += `### ${tab.name}\n\`\`\`mermaid\n${tab.code}\n\`\`\`\n\n`;
+            });
+            return markdown;
+        }
+
+        async function loadS3File(key, isInit = false) {
+            const s3 = new AWS.S3();
+            try {
+                const data = await s3.getObject({
+                    Bucket: state.s3Config.bucket,
+                    Key: key
+                }).promise();
+
+                const content = data.Body.toString('utf-8');
+                
+                state.currentFile = { type: 's3', key: key, backupCount: 0 };
+                state.tabs = [];
+                state.tabCounter = 0;
+                
+                document.getElementById('importContent').value = content;
+                await importMarkdown(true, isInit || state.currentFile.type === 's3');
+                
+                // Set baseline for change detection
+                state.lastSavedContent = generateMarkdown();
+                state.lastSaveTime = data.LastModified ? new Date(data.LastModified) : new Date();
+                updateSaveTimeDisplay();
+                
+                // Persist last file key
+                localStorage.setItem(CONSTANTS.LAST_FILE_KEY, key);
+                
+                // Fetch backup count in background
+                getBackupCount(key).then(count => {
+                    state.currentFile.backupCount = count;
+                    updateFooterUI();
+                });
+                
+                if (!isInit) {
+                    closeS3ListModal();
+                    updateFooterUI();
+                    showNotification('文件已加载: ' + key, 'success');
+                }
+            } catch (err) {
+                console.error('S3 Load Error:', err);
+                if (!isInit) showNotification('加载失败: ' + err.message, 'error');
+                throw err; // Re-throw for auto-load catcher
+            }
+        }
+
+
+        async function pruneBackups(backupDir) {
+            const maxBackups = state.s3Config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
+            const s3 = new AWS.S3();
+            
+            try {
+                const data = await s3.listObjectsV2({
+                    Bucket: state.s3Config.bucket,
+                    Prefix: backupDir
+                }).promise();
+                
+                if (!data.Contents || data.Contents.length <= maxBackups) return;
+                
+                // Sort oldest first
+                const backups = data.Contents.sort((a, b) => a.LastModified - b.LastModified);
+                
+                const toDeleteCount = backups.length - maxBackups;
+                const objectsToDelete = backups.slice(0, toDeleteCount).map(f => ({ Key: f.Key }));
+                
+                if (objectsToDelete.length > 0) {
+                    console.log(`Pruning ${objectsToDelete.length} old backups...`);
+                    await s3.deleteObjects({
+                        Bucket: state.s3Config.bucket,
+                        Delete: { Objects: objectsToDelete }
+                    }).promise();
+                }
+            } catch (err) {
+                console.error('Pruning backups failed', err);
+            }
+        }
+
+        async function handleSave(silent = false) {
+            if (!state.s3Config) {
+                openS3ConfigModal();
+                showNotification('请先配置 S3 对象存储', 'info');
+                return;
+            }
+
+            let markdown = generateMarkdown();
+
+            // Change Detection (Skip if identical)
+            if (state.currentFile.type === 's3' && markdown === state.lastSavedContent) {
+                if (!silent) showNotification('内容未修改，无需保存', 'info');
+                return;
+            }
+
+            const s3 = new AWS.S3();
+            let targetKey = state.currentFile.key;
+
+            if (state.currentFile.type === 'local' || !targetKey) {
+                // Open file browser for selection (save mode)
+                state.isSavingMode = true;
+                listS3Files();
+                showNotification('请选择保存目录', 'info');
+                return;
+            }
+
+            const btn = document.getElementById('footerSaveBtn');
+            const originalHTML = btn.innerHTML;
+            if (!silent) {
+                btn.disabled = true;
+                btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i><span>保存中...</span>`;
+            }
+
+            try {
+                await s3.putObject({
+                    Bucket: state.s3Config.bucket,
+                    Key: targetKey,
+                    Body: markdown,
+                    ContentType: 'text/markdown'
+                }).promise();
+
+                const now = new Date();
+                const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+                
+                // Get filename from key
+                const pathParts = targetKey.split('/');
+                const filename = pathParts.pop();
+                const dir = pathParts.join('/');
+                const filenameNoExt = filename.replace('.md', '');
+                
+                // Construct backup key: dir/_filenameNoExt/timestamp.md
+                const backupDir = (dir ? dir + '/' : '') + '_' + filenameNoExt + '/';
+                const backupKey = `${backupDir}/${timestamp}.md`;
+
+                await s3.putObject({
+                    Bucket: state.s3Config.bucket,
+                    Key: backupKey,
+                    Body: markdown,
+                    ContentType: 'text/markdown'
+                }).promise();
+
+                if (!silent) showNotification('保存成功 (已备份)', 'success');
+                
+                // Update baseline
+                state.lastSavedContent = markdown;
+                state.lastSaveTime = new Date();
+                updateSaveTimeDisplay();
+                
+                // Prune old backups (fire and forget)
+                pruneBackups(backupDir).then(() => {
+                     // Update backup count UI after pruning
+                     getBackupCount(targetKey).then(count => {
+                        if (state.currentFile.key === targetKey) {
+                            state.currentFile.backupCount = count;
+                            updateFooterUI();
+                        }
+                    });
+                });
+
+            } catch (err) {
+                console.error('Save Error:', err);
+                if (!silent) showNotification('保存失败: ' + err.message, 'error');
+            } finally {
+                if (!silent) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHTML;
+                }
+            }
+        }
+
+        async function handleNewFile() {
+            if (await showConfirm('新建文件将清空当前工作区，确定继续吗？', { title: '新建文件', danger: true })) {
+                state.tabs = [];
+                state.tabCounter = 0;
+                state.activeTabId = null;
+                state.currentFile = { type: 'local', key: null, backupCount: 0 };
+                state.lastSavedContent = '';
+                state.lastSaveTime = null;
+                updateSaveTimeDisplay();
+                localStorage.removeItem(CONSTANTS.LAST_FILE_KEY);
+                
+                await addNewTab();
+                updateFooterUI();
+                showNotification('已新建文件 (本地)', 'success');
+            }
+        }
+
+        function updateFooterUI() {
+            const statusEl = document.getElementById('fileStatusDisplay');
+            const saveBtn = document.getElementById('footerSaveBtn');
+            const newBtn = document.getElementById('footerNewBtn');
+            const icon = statusEl.querySelector('i');
+            const text = statusEl.querySelector('span');
+
+            if (state.currentFile.type === 'local') {
+                icon.className = 'fas fa-hdd text-gray-500';
+                text.textContent = '本地存储 (未同步)';
+                text.className = 'font-mono text-gray-500';
+                saveBtn.classList.remove('hidden');
+                newBtn.classList.add('hidden');
+                saveBtn.querySelector('span').textContent = '保存到云端';
+            } else {
+                let displayName = state.currentFile.key;
+                
+                icon.className = 'fas fa-cloud text-green-600';
+                text.textContent = displayName;
+                text.className = 'font-mono text-green-700 font-medium';
+                saveBtn.classList.remove('hidden');
+                saveBtn.querySelector('span').textContent = '保存';
+                newBtn.classList.remove('hidden');
+            }
+            
+            // Add Revert Button if in S3 mode (only once)
+            let revertBtn = document.getElementById('footerRevertBtn');
+            if (!revertBtn) {
+                revertBtn = document.createElement('button');
+                revertBtn.id = 'footerRevertBtn';
+                revertBtn.className = 'hidden flex items-center space-x-1 text-gray-600 hover:text-orange-600 px-2 py-1 rounded hover:bg-gray-100 transition';
+                revertBtn.title = '版本回退';
+                revertBtn.innerHTML = '<i class="fas fa-history"></i><span>回退</span>';
+                revertBtn.onclick = showVersionHistory;
+                document.getElementById('footerSaveBtn').parentNode.insertBefore(revertBtn, document.getElementById('footerSaveBtn'));
+            }
+            
+            if (state.currentFile.type === 's3') {
+                revertBtn.classList.remove('hidden');
+                const count = state.currentFile.backupCount || 0;
+                revertBtn.innerHTML = `<i class="fas fa-history"></i><span>回退 (${count})</span>`;
+            } else {
+                revertBtn.classList.add('hidden');
+            }
+        }
+
+        async function showVersionHistory() {
+            if (!state.currentFile.key) return;
+            
+            const targetKey = state.currentFile.key;
+            // Get backup folder: dir/_filename/
+            const pathParts = targetKey.split('/');
+            const filename = pathParts.pop();
+            const dir = pathParts.join('/');
+            const filenameNoExt = filename.replace('.md', '');
+            const backupDir = (dir ? dir + '/' : '') + '_' + filenameNoExt + '/';
+            
+            const s3 = new AWS.S3();
+            const listContainer = document.getElementById('s3FileList');
+            // Reuse S3 modal but change title
+            document.querySelector('#s3ListModal h3').textContent = '版本历史';
+            document.getElementById('s3Breadcrumbs').textContent = '历史备份: ' + filename;
+            
+            // Hide create folder button for history view
+            const createBtn = document.querySelector('#s3ListModal .fa-folder-plus').parentNode;
+            createBtn.classList.add('hidden');
+            
+            // Add custom close handler to restore UI when closed
+            const closeBtn = document.getElementById('closeS3ListModal');
+            const originalClose = closeBtn.onclick; // This might be bound via addEventListener, better to remove and add
+            // But we have global listener. We can just add a "once" listener to reset UI
+            
+            // Or simpler: We just use listS3Files logic but specialized render
+            
+            listContainer.innerHTML = '<div class="text-center text-gray-500 py-4"><i class="fas fa-spinner fa-spin mr-2"></i>加载备份列表...</div>';
+            document.getElementById('s3ListModal').classList.remove('hidden');
+            
+            try {
+                const data = await s3.listObjectsV2({
+                    Bucket: state.s3Config.bucket,
+                    Prefix: backupDir
+                }).promise();
+                
+                if (!data.Contents || data.Contents.length === 0) {
+                    listContainer.innerHTML = '<div class="text-center text-gray-500 py-8">暂无备份记录</div>';
+                } else {
+                    listContainer.innerHTML = '';
+                    // Sort newest first
+                    const backups = data.Contents.sort((a, b) => b.LastModified - a.LastModified);
+                    
+                    backups.forEach(file => {
+                        const dateObj = new Date(file.LastModified);
+                        const timeStr = timeAgo(dateObj);
+                        const fullDate = dateObj.toLocaleString();
+                        const size = (file.Size / 1024).toFixed(1) + ' KB';
+                        const filename = file.Key.split('/').pop();
+                        
+                        const item = document.createElement('div');
+                        item.className = 'flex items-center justify-between p-3 hover:bg-gray-50 border-b border-gray-100 last:border-0 group';
+                        item.innerHTML = `
+                            <div class="flex items-center space-x-3 flex-1">
+                                <i class="fas fa-clock text-gray-400 text-lg"></i>
+                                <div class="flex flex-col flex-1">
+                                    <div class="flex items-center justify-between">
+                                         <span class="text-sm font-medium text-gray-700">${filename}</span>
+                                    </div>
+                                    <div class="flex items-center space-x-2 text-xs text-gray-400 mt-0.5">
+                                        <span title="${fullDate}">${fullDate}</span>
+                                        <span>·</span>
+                                        <span>${size}</span>
+                                        <span class="font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded" title="${fullDate}">${timeStr}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-2 ml-2">
+                                <button class="text-blue-600 hover:text-blue-800 text-xs px-2 py-1 border border-blue-200 rounded hover:bg-blue-50" onclick="diffVersion('${file.Key}')">
+                                    对比
+                                </button>
+                                <button class="text-red-600 hover:text-red-800 text-xs px-2 py-1 border border-red-200 rounded hover:bg-red-50" onclick="restoreVersion('${file.Key}')">
+                                    回退
+                                </button>
+                            </div>
+                        `;
+                        listContainer.appendChild(item);
+                    });
+                }
+                
+                // Cleanup when closing specific to history view
+                const resetUI = () => {
+                    document.querySelector('#s3ListModal h3').textContent = '云端文件列表';
+                    createBtn.classList.remove('hidden');
+                    closeBtn.removeEventListener('click', resetUI);
+                };
+                closeBtn.addEventListener('click', resetUI);
+                
+            } catch (err) {
+                listContainer.innerHTML = `<div class="text-center text-red-500 py-4">加载失败: ${err.message}</div>`;
+            }
+        }
+
+        async function restoreVersion(backupKey) {
+            if (!await showConfirm('确定要回退到此版本吗？当前内容将自动备份。', { title: '回退确认' })) return;
+            
+            const s3 = new AWS.S3();
+            try {
+                // 1. Get backup content
+                const data = await s3.getObject({ Bucket: state.s3Config.bucket, Key: backupKey }).promise();
+                const content = data.Body.toString('utf-8');
+                
+                // 2. Perform a "save" of CURRENT content to backup first (standard save logic handles backup)
+                // Actually handleSave logic: Saves current state to Main, AND creates a backup.
+                // We want to: 
+                // A. Backup CURRENT state (handled by handleSave logic if we call it, but we are about to overwrite state)
+                // So we should manually backup current state first?
+                // `handleSave` saves `state.tabs` to S3. 
+                
+                // Let's do:
+                // 1. Manually backup current state (just in case) -> "Auto-backup before revert"
+                // 2. Overwrite Main File with Backup Content
+                // 3. Reload Editor with Backup Content
+                
+                // Step 1: Backup current
+                await handleSave(true); // This saves current editor content to Main AND creates a timestamp backup.
+                
+                // Step 2: Overwrite Main with selected backup content
+                await s3.putObject({
+                    Bucket: state.s3Config.bucket,
+                    Key: state.currentFile.key,
+                    Body: content,
+                    ContentType: 'text/markdown'
+                }).promise();
+                
+                // Step 3: Load content into editor
+                state.tabs = [];
+                state.tabCounter = 0;
+                document.getElementById('importContent').value = content;
+                await importMarkdown(true); // Override import
+                
+                // Close modal
+                document.getElementById('closeS3ListModal').click();
+                showNotification('版本回退成功', 'success');
+                
+            } catch (err) {
+                showNotification('回退失败: ' + err.message, 'error');
+            }
+        }
+
+        async function diffVersion(backupKey) {
+            const s3 = new AWS.S3();
+            try {
+                const data = await s3.getObject({ Bucket: state.s3Config.bucket, Key: backupKey }).promise();
+                const backupContent = data.Body.toString('utf-8');
+                
+                // Generate current markdown
+                let currentContent = '';
+                state.tabs.forEach(tab => {
+                    currentContent += `### ${tab.name}\n\`\`\`mermaid\n${tab.code}\n\`\`\`\n\n`;
+                });
+                
+                // Open Diff Modal
+                const diffModal = document.getElementById('diffModal');
+                diffModal.classList.remove('hidden');
+                
+                // Init sync scroll
+                const leftContainer = document.getElementById('diffLeft');
+                const rightContainer = document.getElementById('diffRight');
+                
+                let activeSide = null;
+                
+                // Track active side to prevent scroll loop (flickering)
+                const setActive = (side) => { activeSide = side; };
+                
+                ['mouseenter', 'touchstart'].forEach(evt => {
+                    leftContainer.addEventListener(evt, () => setActive('left'));
+                    rightContainer.addEventListener(evt, () => setActive('right'));
+                });
+
+                leftContainer.onscroll = function() {
+                    if (!activeSide) activeSide = 'left';
+                    if (activeSide === 'left') {
+                        rightContainer.scrollTop = this.scrollTop;
+                    }
+                };
+                
+                rightContainer.onscroll = function() {
+                    if (!activeSide) activeSide = 'right';
+                    if (activeSide === 'right') {
+                        leftContainer.scrollTop = this.scrollTop;
+                    }
+                };
+                
+                // Bind checkbox
+                const checkBox = document.getElementById('diffOnlyCheck');
+                checkBox.checked = true; // Default checked
+                checkBox.onchange = () => renderDiff(backupContent, currentContent, checkBox.checked);
+                
+                // Initial Render
+                renderDiff(backupContent, currentContent, true);
+                
+            } catch (err) {
+                showNotification('对比加载失败: ' + err.message, 'error');
+            }
+        }
+        
+        function renderDiff(oldText, newText, diffOnly) {
+            const diff = Diff.diffLines(oldText, newText);
+            const leftContainer = document.getElementById('diffLeft');
+            const rightContainer = document.getElementById('diffRight');
+            
+            leftContainer.innerHTML = '';
+            rightContainer.innerHTML = '';
+            
+            let leftLineNum = 1;
+            let rightLineNum = 1;
+
+            diff.forEach(part => {
+                // If diffOnly is checked, skip parts that are NOT added AND NOT removed (i.e. common parts)
+                // BUT we still need to track line numbers for hidden parts!
+                if (diffOnly && !part.added && !part.removed) {
+                    const lineCount = part.value.replace(/\n$/, '').split('\n').length;
+                    leftLineNum += lineCount;
+                    rightLineNum += lineCount;
+                    return;
+                }
+
+                const lines = part.value.replace(/\n$/, '').split('\n');
+                
+                lines.forEach(line => {
+                    const row = document.createElement('div');
+                    row.className = 'flex';
+                    
+                    const leftRow = document.createElement('div');
+                    leftRow.className = 'flex w-full';
+                    
+                    const rightRow = document.createElement('div');
+                    rightRow.className = 'flex w-full';
+
+                    // Helper to create line number
+                    const createLineNum = (num, type) => {
+                        const span = document.createElement('span');
+                        span.className = `w-8 flex-shrink-0 text-right pr-2 select-none text-[10px] leading-5 ${
+                            type === 'removed' ? 'text-red-400 bg-red-50' : 
+                            type === 'added' ? 'text-green-400 bg-green-50' : 
+                            'text-gray-300 bg-gray-50 border-r border-gray-100'
+                        }`;
+                        span.textContent = num || '';
+                        return span;
+                    };
+
+                    // Helper to create content
+                    const createContent = (text, type) => {
+                        const div = document.createElement('div');
+                        div.className = `flex-1 whitespace-pre-wrap break-all px-2 leading-5 min-h-[1.25rem] font-mono ${
+                            type === 'removed' ? 'bg-red-100 text-red-900' : 
+                            type === 'added' ? 'bg-green-100 text-green-900' : 
+                            'text-gray-600'
+                        }`;
+                        div.textContent = text;
+                        return div;
+                    };
+                    
+                    const createEmpty = (type) => {
+                         const div = document.createElement('div');
+                         div.className = `flex-1 relative min-h-[1.25rem] ${type === 'added' ? 'bg-gray-50/30' : 'bg-gray-50/30'}`;
+                         div.innerHTML = '<div class="absolute inset-0 opacity-10 bg-[repeating-linear-gradient(45deg,#000,#000_1px,transparent_1px,transparent_4px)]"></div>';
+                         return div;
+                    }
+
+                    if (part.removed) {
+                        // Removed: Left has content, Right is empty
+                        leftRow.appendChild(createLineNum(leftLineNum++, 'removed'));
+                        leftRow.appendChild(createContent(line, 'removed'));
+                        
+                        rightRow.appendChild(createLineNum('', 'empty'));
+                        rightRow.appendChild(createEmpty('removed'));
+                    } else if (part.added) {
+                        // Added: Left is empty, Right has content
+                        leftRow.appendChild(createLineNum('', 'empty'));
+                        leftRow.appendChild(createEmpty('added'));
+                        
+                        rightRow.appendChild(createLineNum(rightLineNum++, 'added'));
+                        rightRow.appendChild(createContent(line, 'added'));
+                    } else {
+                        // Common
+                        leftRow.appendChild(createLineNum(leftLineNum++, 'common'));
+                        leftRow.appendChild(createContent(line, 'common'));
+                        
+                        rightRow.appendChild(createLineNum(rightLineNum++, 'common'));
+                        rightRow.appendChild(createContent(line, 'common'));
+                    }
+                    
+                    leftContainer.appendChild(leftRow);
+                    rightContainer.appendChild(rightRow);
+                });
+            });
+            
+            if (leftContainer.children.length === 0) {
+                 leftContainer.innerHTML = '<div class="text-center text-gray-400 py-4">无差异</div>';
+                 rightContainer.innerHTML = '<div class="text-center text-gray-400 py-4">无差异</div>';
+            }
+        }
+        
+        function closeDiffModal() {
+            document.getElementById('diffModal').classList.add('hidden');
         }
 
         // --- Tab Management ---
@@ -251,7 +1218,7 @@
             const tab = state.tabs.find(t => t.id === tabId);
             if (!tab) return;
 
-            const newName = prompt('请输入新的标签名称:', tab.name);
+            const newName = await showPrompt('请输入新的标签名称:', tab.name);
             if (newName === null || newName.trim() === '') return;
 
             if (newName.trim() !== tab.name) {
@@ -333,9 +1300,95 @@
             await saveTabsToDB();
         }
 
+        // --- Helpers ---
+        function showConfirm(message, options = {}) {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('customConfirmModal');
+                const titleEl = document.getElementById('confirmTitle');
+                const msgEl = document.getElementById('confirmMessage');
+                const okBtn = document.getElementById('confirmOkBtn');
+                const cancelBtn = document.getElementById('confirmCancelBtn');
+
+                titleEl.textContent = options.title || '确认';
+                msgEl.textContent = message;
+
+                if (options.danger) {
+                    okBtn.className = 'px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition';
+                } else {
+                    okBtn.className = 'px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition';
+                }
+
+                const close = (result) => {
+                    modal.classList.add('hidden');
+                    okBtn.onclick = null;
+                    cancelBtn.onclick = null;
+                    resolve(result);
+                };
+
+                okBtn.onclick = () => close(true);
+                cancelBtn.onclick = () => close(false);
+
+                modal.classList.remove('hidden');
+            });
+        }
+
+        function showPrompt(title, defaultValue = '') {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('customPromptModal');
+                const titleEl = document.getElementById('promptTitle');
+                const inputEl = document.getElementById('promptInput');
+                const okBtn = document.getElementById('promptOkBtn');
+                const cancelBtn = document.getElementById('promptCancelBtn');
+
+                titleEl.textContent = title;
+                inputEl.value = defaultValue;
+
+                const close = (value) => {
+                    modal.classList.add('hidden');
+                    okBtn.onclick = null;
+                    cancelBtn.onclick = null;
+                    inputEl.onkeydown = null;
+                    resolve(value);
+                };
+
+                const submit = () => {
+                    const val = inputEl.value.trim();
+                    if (val) close(val);
+                };
+
+                okBtn.onclick = submit;
+                cancelBtn.onclick = () => close(null);
+
+                inputEl.onkeydown = (e) => {
+                    if (e.key === 'Enter') submit();
+                    if (e.key === 'Escape') close(null);
+                };
+
+                modal.classList.remove('hidden');
+                setTimeout(() => inputEl.focus(), 100);
+            });
+        }
+
+        function setupAutoScrollHide(el) {
+            let timeout;
+            el.addEventListener('scroll', () => {
+                el.classList.add('scrolling');
+                clearTimeout(timeout);
+                timeout = setTimeout(() => {
+                    el.classList.remove('scrolling');
+                }, 1000);
+            });
+        }
+
         // --- Editor & UI Functions ---
         function initEditor() {
             const editor = document.getElementById('mermaidEditor');
+            
+            // Setup scrollbar auto-hide logic
+            setupAutoScrollHide(editor);
+            // Also apply to preview container
+            const previewContainer = document.querySelector('#rightPanel > .flex-1');
+            if (previewContainer) setupAutoScrollHide(previewContainer);
 
             // Initial Load
             const activeTab = state.tabs.find(t => t.id === state.activeTabId);
@@ -456,6 +1509,7 @@
                         <p class="text-lg font-medium text-gray-500">图表预览区域</p>
                         <p class="text-sm mt-2 text-gray-400 max-w-md mx-auto">在左侧输入 Mermaid 代码,图表将实时显示在此处。</p>
                     </div>`;
+                state.isRenderError = false;
                 return;
             }
 
@@ -483,13 +1537,15 @@
 
                 document.getElementById('errorMessage').classList.add('hidden');
                 document.getElementById('renderStatus').innerHTML = '<i class="fas fa-check-circle mr-1"></i>渲染正常';
-                document.getElementById('renderStatus').className = 'text-green-600 flex items-center';
+                document.getElementById('renderStatus').className = 'text-green-600 flex items-center text-xs';
                 document.getElementById('lastUpdated').textContent = '最后更新: ' + new Date().toLocaleTimeString();
+                state.isRenderError = false;
             } catch (error) {
                 console.error('Mermaid render error:', error);
                 showError(error.message || '渲染失败,请检查语法');
-                document.getElementById('renderStatus').innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i>渲染错误';
-                document.getElementById('renderStatus').className = 'text-red-600 flex items-center';
+                document.getElementById('renderStatus').innerHTML = '<i class="fas fa-exclamation-circle mr-1 text-xs"></i>渲染错误';
+                document.getElementById('renderStatus').className = 'text-red-600 flex items-center text-xs';
+                state.isRenderError = true;
             }
         }
 
@@ -794,7 +1850,7 @@
         }
 
         async function clearEditor() {
-            if (confirm('确定要清空当前图表吗?')) {
+            if (await showConfirm('确定要清空当前图表吗?', { title: '清空确认', danger: true })) {
                 const editor = document.getElementById('mermaidEditor');
                 editor.value = '';
                 state.currentCode = '';
@@ -860,9 +1916,52 @@
                 if (notification.parentNode) {
                     notification.style.opacity = '0';
                     notification.style.transform = 'translateY(-20px)';
-                    setTimeout(() => notification.parentNode?.remove(), 300);
+                    setTimeout(() => notification.remove(), 300);
                 }
             }, 3000);
+        }
+
+
+
+        function closeS3ConfigModal() {
+            document.getElementById('s3ConfigModal').classList.add('hidden');
+        }
+
+        function closeS3ListModal() {
+            document.getElementById('s3ListModal').classList.add('hidden');
+            state.isSavingMode = false;
+            const saveAction = document.getElementById('s3BrowserSaveAction');
+            if (saveAction) saveAction.classList.add('hidden');
+        }
+
+        async function confirmS3Save() {
+            const filenameInput = document.getElementById('s3SaveFilename');
+            let filename = filenameInput.value.trim();
+            
+            if (!filename) {
+                showNotification('请输入文件名', 'error');
+                return;
+            }
+            
+            if (!filename.endsWith('.md')) filename += '.md';
+            
+            const targetKey = (state.s3BrowserPath || '') + filename;
+            
+            // Check if exists
+            const s3 = new AWS.S3();
+            try {
+                await s3.headObject({ Bucket: state.s3Config.bucket, Key: targetKey }).promise();
+                if (!await showConfirm(`文件 "${filename}" 已存在，确定要覆盖吗？`, { title: '覆盖确认' })) return;
+            } catch (err) {
+                // Not found is good
+                if (err.code !== 'NotFound') {
+                    console.error(err);
+                }
+            }
+            
+            state.currentFile = { type: 's3', key: targetKey };
+            closeS3ListModal();
+            handleSave(); // Now currentFile is set, it will proceed to save
         }
 
         // --- Export/Import Modal Logic ---
@@ -917,12 +2016,21 @@
             document.getElementById('importModal').classList.add('hidden');
         }
 
-        async function importMarkdown() {
+        async function importMarkdown(isOverride = false, isSilent = false) {
             const content = document.getElementById('importContent').value.trim();
             if (!content) return showNotification('请输入Markdown内容', 'error');
 
             const sections = content.split(/###\s+/).filter(s => s.trim());
             if (sections.length === 0) return showNotification('未找到有效的图表内容', 'error');
+
+            if (isOverride && !isSilent) {
+                if (!await showConfirm('覆盖导入将清空当前所有图表，确定继续吗？', { title: '导入确认', danger: true })) return;
+            }
+            
+            if (isOverride) {
+                state.tabs = [];
+                state.tabCounter = 0;
+            }
 
             let importedCount = 0;
             for (const section of sections) {
@@ -930,7 +2038,7 @@
                 const title = lines[0].trim();
                 let code = '';
                 let inCodeBlock = false;
-
+                
                 for (let i = 1; i < lines.length; i++) {
                     const line = lines[i];
                     if (line.trim().startsWith('```mermaid')) { inCodeBlock = true; continue; }
@@ -951,9 +2059,17 @@
 
             if (importedCount > 0) {
                 await saveTabsToDB();
+                
+                // If override and empty, add a default one or just ensure activeTabId is valid
+                if (state.tabs.length === 0) {
+                     // Should technically not happen if importedCount > 0, but good for safety
+                     state.tabCounter++;
+                     state.tabs.push({ id: state.tabCounter, name: '图表 1', code: INITIAL_CODE });
+                }
+
                 state.activeTabId = state.tabs[state.tabs.length - 1].id;
                 renderTabs();
-
+                
                 const currentTab = state.tabs.find(t => t.id === state.activeTabId);
                 if (currentTab) loadTabIntoEditor(currentTab);
 
@@ -1004,7 +2120,26 @@
             document.getElementById('importMarkdownBtn').addEventListener('click', openImportModal);
             document.getElementById('closeImportModal').addEventListener('click', closeImportModal);
             document.getElementById('cancelImportBtn').addEventListener('click', closeImportModal);
-            document.getElementById('confirmImportBtn').addEventListener('click', importMarkdown);
+            document.getElementById('appendImportBtn').addEventListener('click', () => importMarkdown(false));
+            document.getElementById('overrideImportBtn').addEventListener('click', () => importMarkdown(true));
+
+            // S3 Events
+            document.getElementById('s3ConfigBtn').addEventListener('click', openS3ConfigModal);
+            document.getElementById('closeS3ConfigModal').addEventListener('click', closeS3ConfigModal);
+            document.getElementById('saveS3ConfigBtn').addEventListener('click', saveS3Config);
+            document.getElementById('closeS3ListModal').addEventListener('click', closeS3ListModal);
+            
+            // Footer Events
+            document.getElementById('fileStatusDisplay').addEventListener('click', () => {
+                if (state.currentFile.type === 's3') {
+                    // Auto-save before list
+                    handleSave(true).then(listS3Files); 
+                } else {
+                    listS3Files();
+                }
+            });
+            document.getElementById('footerSaveBtn').addEventListener('click', () => handleSave(false));
+            document.getElementById('footerNewBtn').addEventListener('click', handleNewFile);
 
             document.getElementById('themeSelect').addEventListener('change', function () {
                 mermaid.initialize({ theme: this.value });
@@ -1017,6 +2152,13 @@
             document.getElementById('resetZoomBtn').addEventListener('click', resetZoom);
             document.getElementById('fitToScreenBtn').addEventListener('click', fitToScreen);
             document.getElementById('copyImageBtn').addEventListener('click', copyImageToClipboard);
+            document.getElementById('refreshBtn').addEventListener('click', function() {
+                const icon = this.querySelector('i');
+                icon.classList.add('fa-spin');
+                renderMermaid().then(() => {
+                    setTimeout(() => icon.classList.remove('fa-spin'), 500);
+                });
+            });
 
             document.addEventListener('keydown', function (e) {
                 if (e.ctrlKey || e.metaKey) {
@@ -1081,20 +2223,30 @@
         .scrollbar-thin::-webkit-scrollbar {
             width: 6px;
             height: 6px;
+            background: transparent;
         }
 
         .scrollbar-thin::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 3px;
+            background: transparent;
         }
 
         .scrollbar-thin::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
+            background: rgba(156, 163, 175, 0);
             border-radius: 3px;
+            /* Delay hide: wait 1s, then fade out over 0.5s */
+            transition: background 0.5s ease-in-out 1s;
+        }
+
+        .scrollbar-thin:hover::-webkit-scrollbar-thumb,
+        .scrollbar-thin.scrolling::-webkit-scrollbar-thumb {
+            background: rgba(156, 163, 175, 0.5);
+            /* Show immediately */
+            transition: background 0.1s ease-in-out 0s;
         }
 
         .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-            background: #a8a8a8;
+            background: rgba(107, 114, 128, 0.8);
+            transition: background 0.1s ease-in-out 0s;
         }
 
         .resize-handle {
@@ -1296,6 +2448,11 @@
                     <i class="fas fa-file-import text-xs"></i>
                     <span>导入MD</span>
                 </button>
+                <div class="h-4 w-px bg-gray-300"></div>
+                <button id="s3ConfigBtn" title="S3 配置"
+                    class="flex items-center justify-center w-6 h-6 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded transition">
+                    <i class="fas fa-cog text-xs"></i>
+                </button>
             </div>
         </header>
 
@@ -1322,17 +2479,26 @@
                         placeholder="在此输入 Mermaid 代码,例如:&#10;flowchart TD&#10;    A[开始] --> B[结束]"></textarea>
                 </div>
 
-                <div id="errorMessage" class="hidden mx-3 mb-3 p-2 bg-red-50 border border-red-200 rounded-lg">
-                    <div class="flex items-start">
-                        <div class="flex-shrink-0">
-                            <i class="fas fa-exclamation-circle text-red-500 text-xs"></i>
+
+
+                <!-- Footer Status Bar -->
+                <div class="flex items-center justify-between px-3 py-1.5 bg-white border-t border-gray-200 text-xs h-[33px]">
+                    <div class="flex items-center">
+                        <div id="fileStatusDisplay" class="flex items-center space-x-2 text-gray-600 cursor-pointer hover:bg-gray-100 px-2 py-1 rounded transition" title="点击切换文件">
+                            <i class="fas fa-hdd"></i>
+                            <span class="font-mono">本地存储</span>
                         </div>
-                        <div class="ml-2">
-                            <h3 class="text-xs font-medium text-red-800">语法错误</h3>
-                            <div class="mt-0.5 text-xs text-red-700">
-                                <p id="errorText"></p>
-                            </div>
-                        </div>
+                        <span id="lastSavedTime" class="text-gray-400 text-[10px] ml-3 hidden sm:inline-block"></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button id="footerNewBtn" class="hidden flex items-center space-x-1 text-gray-600 hover:text-primary px-2 py-1 rounded hover:bg-gray-100 transition" title="新建文件">
+                            <i class="fas fa-file-medical"></i>
+                            <span>新建</span>
+                        </button>
+                        <button id="footerSaveBtn" class="hidden flex items-center space-x-1 text-gray-600 hover:text-green-600 px-2 py-1 rounded hover:bg-gray-100 transition" title="保存到云端">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <span>保存</span>
+                        </button>
                     </div>
                 </div>
             </section>
@@ -1342,7 +2508,7 @@
                 <div class="w-2 h-8 bg-gray-400 rounded-full opacity-50"></div>
             </div>
 
-            <section id="rightPanel" class="flex flex-col bg-gray-50" style="width: 50%">
+            <section id="rightPanel" class="flex flex-col bg-gray-50 relative" style="width: 50%">
                 <div class="flex items-center justify-between px-3 py-1 border-b border-gray-200 bg-white">
                     <div class="flex items-center space-x-3">
                         <h2 class="text-xs font-semibold text-gray-700 flex items-center">
@@ -1369,6 +2535,10 @@
                                 <i class="fas fa-search-plus text-xs"></i>
                             </button>
                         </div>
+
+                        <button id="refreshBtn" class="flex items-center justify-center w-6 h-5 text-gray-500 hover:text-primary hover:bg-gray-200 rounded transition ml-1" title="刷新图表">
+                            <i class="fas fa-sync-alt text-xs"></i>
+                        </button>
                     </div>
 
                     <div class="flex items-center space-x-2 text-xs text-gray-500">
@@ -1384,6 +2554,23 @@
                 </div>
 
                 <div class="flex-1 overflow-auto p-3 scrollbar-thin">
+                    <div id="errorMessage" class="hidden absolute bottom-4 left-4 right-4 mx-auto max-w-md p-3 bg-red-50/90 backdrop-blur border border-red-200 rounded-lg shadow-lg z-20">
+                        <div class="flex items-start">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-exclamation-circle text-red-500 text-sm"></i>
+                            </div>
+                            <div class="ml-2 flex-1">
+                                <h3 class="text-xs font-bold text-red-800">语法错误</h3>
+                                <div class="mt-1 text-xs text-red-700 break-words font-mono">
+                                    <p id="errorText"></p>
+                                </div>
+                            </div>
+                            <button onclick="document.getElementById('errorMessage').classList.add('hidden')" class="ml-2 text-red-400 hover:text-red-600">
+                                <i class="fas fa-times text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
                     <div id="mermaidPreview" class="min-h-full flex items-center justify-center">
                         <div class="text-center text-gray-400">
                             <div class="text-5xl mb-4 opacity-30">📊</div>
@@ -1413,7 +2600,7 @@
                 </div>
 
                 <div
-                    class="px-3 py-1 border-t border-gray-200 bg-white text-xs text-gray-500 flex items-center justify-between">
+                    class="px-3 py-1 border-t border-gray-200 bg-white text-xs text-gray-500 flex items-center justify-between h-[33px]">
                     <div class="flex items-center space-x-3">
                         <span class="flex items-center">
                             <i class="fas fa-info-circle mr-1 text-xs"></i>
@@ -1485,11 +2672,165 @@
                     <i class="fas fa-times text-xs"></i>
                     <span>取消</span>
                 </button>
-                <button id="confirmImportBtn"
-                    class="flex items-center space-x-1 bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
-                    <i class="fas fa-check text-xs"></i>
-                    <span>导入</span>
+                <button id="appendImportBtn"
+                    class="flex items-center space-x-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-plus text-xs"></i>
+                    <span>增量导入</span>
                 </button>
+                <button id="overrideImportBtn"
+                    class="flex items-center space-x-1 bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-trash-alt text-xs"></i>
+                    <span>覆盖导入</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- S3 Config Modal -->
+    <div id="s3ConfigModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 flex flex-col">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-800">S3 对象存储配置</h3>
+                <button id="closeS3ConfigModal" class="text-gray-400 hover:text-gray-600 transition">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-4 space-y-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
+                    <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
+                    <input id="s3Region" type="text" placeholder="us-east-1"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span class="text-red-500">*</span></label>
+                    <input id="s3AccessKey" type="text"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span class="text-red-500">*</span></label>
+                    <input id="s3SecretKey" type="password"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span class="text-red-500">*</span></label>
+                    <input id="s3Bucket" type="text"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div class="flex space-x-3">
+                    <div class="flex-1">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">最大备份数量</label>
+                        <input id="s3MaxBackups" type="number" min="1" max="100" value="10"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                    </div>
+                </div>
+                <div class="flex items-center space-x-2 my-2">
+                     <input type="checkbox" id="s3EnableAutoSave" class="rounded text-primary focus:ring-primary h-4 w-4" onchange="toggleIdleTimeInput(this.checked)">
+                     <label for="s3EnableAutoSave" class="text-xs font-medium text-gray-700 select-none">启用自动备份</label>
+                </div>
+                <div id="s3IdleTimeContainer" class="mb-4 hidden">
+                     <label class="block text-xs font-medium text-gray-700 mb-1">自动保存 (空闲分钟)</label>
+                     <input id="s3IdleTime" type="number" min="1" max="60" value="1"
+                            class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div class="text-xs text-yellow-600 bg-yellow-50 p-2 rounded border border-yellow-200">
+                    <i class="fas fa-exclamation-triangle mr-1"></i> 注意：密钥将保存在浏览器本地存储中，请勿在公共设备上使用。
+                </div>
+            </div>
+            <div class="flex items-center justify-end space-x-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                <button id="saveS3ConfigBtn"
+                    class="flex items-center space-x-1 bg-primary hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-save text-xs"></i>
+                    <span>保存配置</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- S3 File List Modal -->
+    <div id="s3ListModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <div class="flex flex-col">
+                    <h3 class="text-sm font-semibold text-gray-800">云端文件</h3>
+                    <div id="s3Breadcrumbs" class="text-xs text-gray-500 mt-1 flex items-center space-x-1"></div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button class="text-gray-500 hover:text-primary p-1 rounded transition" title="新建文件夹" onclick="createS3Folder()">
+                        <i class="fas fa-folder-plus"></i>
+                    </button>
+                    <button id="closeS3ListModal" class="text-gray-400 hover:text-gray-600 transition">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-auto" id="s3FileList">
+                <!-- File items will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Diff Modal (Side-by-Side) -->
+    <div id="diffModal" class="fixed inset-0 bg-black bg-opacity-50 z-[60] hidden flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white rounded-lg shadow-2xl w-[95vw] h-[85vh] flex flex-col mx-4 overflow-hidden">
+            <!-- Header -->
+            <div class="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
+                <div class="flex items-center space-x-4">
+                    <h3 class="font-bold text-gray-800 text-sm">版本对比</h3>
+                    <label class="flex items-center space-x-2 text-xs text-gray-600 cursor-pointer select-none">
+                        <input type="checkbox" id="diffOnlyCheck" class="rounded text-primary focus:ring-primary" checked>
+                        <span>只显示差异内容</span>
+                    </label>
+                </div>
+                <div class="space-x-2">
+                    <button onclick="closeDiffModal()" class="text-gray-500 hover:text-gray-700 hover:bg-gray-200 px-2 py-1 rounded transition">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+            <!-- Diff Content -->
+            <div class="flex-1 overflow-hidden flex text-xs font-mono relative bg-white">
+                <!-- Left: Backup -->
+                <div class="w-1/2 border-r border-gray-200 flex flex-col">
+                    <div class="flex-shrink-0 px-2 py-1 bg-gray-100 border-b border-gray-200 font-semibold text-center text-gray-600 text-[10px] uppercase tracking-wider">备份版本 (旧)</div>
+                    <div id="diffLeft" class="flex-1 overflow-auto"></div>
+                </div>
+                <!-- Right: Current -->
+                <div class="w-1/2 flex flex-col">
+                    <div class="flex-shrink-0 px-2 py-1 bg-gray-100 border-b border-gray-200 font-semibold text-center text-gray-600 text-[10px] uppercase tracking-wider">当前版本 (新)</div>
+                    <div id="diffRight" class="flex-1 overflow-auto"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Custom Confirm Modal -->
+    <div id="customConfirmModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 overflow-hidden transform transition-all">
+            <div class="px-4 py-4">
+                <h3 id="confirmTitle" class="text-sm font-semibold text-gray-900 mb-2">确认</h3>
+                <p id="confirmMessage" class="text-xs text-gray-600 mb-4"></p>
+                <div class="flex justify-end space-x-2">
+                    <button id="confirmCancelBtn" class="px-3 py-1.5 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-50 transition">取消</button>
+                    <button id="confirmOkBtn" class="px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition">确定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Prompt Modal -->
+    <div id="customPromptModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 overflow-hidden transform transition-all">
+            <div class="px-4 py-4">
+                <h3 id="promptTitle" class="text-sm font-semibold text-gray-900 mb-2">输入</h3>
+                <input id="promptInput" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent mb-4" />
+                <div class="flex justify-end space-x-2">
+                    <button id="promptCancelBtn" class="px-3 py-1.5 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-50 transition">取消</button>
+                    <button id="promptOkBtn" class="px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition">确定</button>
+                </div>
             </div>
         </div>
     </div>

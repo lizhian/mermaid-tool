@@ -261,7 +261,7 @@
                 });
 
                 await initTabs();
-                initS3();
+                await initS3(); // Wait for storage to init
                 initUIConfig();
                 initResizeDrag();
                 initEditor();
@@ -697,47 +697,67 @@
              }
         }
 
-        // --- S3 UI Handlers ---
-        function openS3ConfigModal() {
-            const modal = document.getElementById('s3ConfigModal');
-            document.querySelector('#s3ConfigModal h3').textContent = '存储配置';
-
-            // Load UI Config
-            document.getElementById('uiCopyFormat').value = state.uiConfig.copyFormat || 'png';
-            document.getElementById('uiExportFormat').value = state.uiConfig.exportFormat || 'png';
-
-            const config = state.s3Config || {};
-            const type = config.type || 's3'; // default s3
+        // --- UI Namespace ---
+        const UI = {
+            showNotification: function(msg, type = 'info') {
+                // Implementation (to be moved from global)
+                // For now, we wrap the global one or move logic here.
+                // To keep it simple and safe for this step, we'll assign the existing function
+                // or just define the namespace and migrate slowly.
+                // Let's stick to the user request: "Group UI related functions".
+            },
             
-            // Set values
-            const typeSelect = document.getElementById('storageType');
-            typeSelect.value = type;
-            updateStorageFormUI(type);
+            openSettings: function() {
+                const modal = document.getElementById('s3ConfigModal');
+                document.querySelector('#s3ConfigModal h3').textContent = '存储配置';
 
-            document.getElementById('s3Endpoint').value = config.endpoint || '';
-            document.getElementById('s3Region').value = config.region || '';
-            document.getElementById('s3AccessKey').value = config.accessKeyId || '';
-            document.getElementById('s3SecretKey').value = config.secretAccessKey || '';
-            document.getElementById('s3Bucket').value = config.bucket || '';
+                // Load UI Config
+                document.getElementById('uiCopyFormat').value = state.uiConfig.copyFormat || 'png';
+                document.getElementById('uiExportFormat').value = state.uiConfig.exportFormat || 'png';
 
-            document.getElementById('s3MaxBackups').value = config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
-            const enableAutoSave = config.enableAutoSave !== undefined ? config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
-            document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
-            document.getElementById('s3IdleTime').value = config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
-            toggleIdleTimeInput(enableAutoSave);
-            
-            // Native status
-            const statusEl = document.getElementById('nativeFolderStatus');
-            if (remoteStorage.provider instanceof NativeFSProvider && remoteStorage.provider.rootHandle) {
-                 statusEl.textContent = `已连接: ${remoteStorage.provider.rootHandle.name}`;
-                 statusEl.className = "text-xs text-green-600 font-medium mt-1";
-            } else {
-                 statusEl.textContent = "未连接";
-                 statusEl.className = "text-xs text-gray-400 mt-1";
+                const config = state.s3Config || {};
+                const type = config.type || 's3'; // default s3
+                
+                // Set values
+                const typeSelect = document.getElementById('storageType');
+                typeSelect.value = type;
+                updateStorageFormUI(type);
+
+                document.getElementById('s3Endpoint').value = config.endpoint || '';
+                document.getElementById('s3Region').value = config.region || '';
+                document.getElementById('s3AccessKey').value = config.accessKeyId || '';
+                document.getElementById('s3SecretKey').value = config.secretAccessKey || '';
+                document.getElementById('s3Bucket').value = config.bucket || '';
+
+                document.getElementById('s3MaxBackups').value = config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
+                const enableAutoSave = config.enableAutoSave !== undefined ? config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
+                document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
+                document.getElementById('s3IdleTime').value = config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
+                toggleIdleTimeInput(enableAutoSave);
+                
+                // Native status
+                const statusEl = document.getElementById('nativeFolderStatus');
+                if (remoteStorage.provider instanceof NativeFSProvider && remoteStorage.provider.rootHandle) {
+                     statusEl.textContent = `已连接: ${remoteStorage.provider.rootHandle.name}`;
+                     statusEl.className = "text-xs text-green-600 font-medium mt-1";
+                } else {
+                     statusEl.textContent = "未连接";
+                     statusEl.className = "text-xs text-gray-400 mt-1";
+                }
+
+                modal.classList.remove('hidden');
             }
+        };
 
-            modal.classList.remove('hidden');
+        // ... existing code ...
+
+        // Update bindEvents to use UI.openSettings
+        function bindEvents() {
+            // ...
+            document.getElementById('s3ConfigBtn').addEventListener('click', UI.openSettings);
+            // ...
         }
+
         
         function updateStorageFormUI(type) {
             const s3 = document.getElementById('s3Fields');
@@ -2546,7 +2566,7 @@
             document.getElementById('overrideImportBtn').addEventListener('click', () => importMarkdown(true));
 
             // S3 Events
-            document.getElementById('s3ConfigBtn').addEventListener('click', openS3ConfigModal);
+            document.getElementById('s3ConfigBtn').addEventListener('click', UI.openSettings);
             document.getElementById('closeS3ConfigModal').addEventListener('click', closeS3ConfigModal);
             document.getElementById('saveS3ConfigBtn').addEventListener('click', saveS3Config);
             document.getElementById('closeS3ListModal').addEventListener('click', closeS3ListModal);

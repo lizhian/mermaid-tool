@@ -145,31 +145,115 @@
             async list(path) {
                 const url = this.endpoint + '/' + (path ? path.replace(/^\//, '') : '');
                 
-                // Add explicit timeout to fetch
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
+                let response;
                 try {
-                    const response = await fetch(url, {
+                    // 15s Timeout
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 15000);
+                    
+                    response = await fetch(url, {
                         method: 'PROPFIND',
                         headers: { ...this._getHeaders(), 'Depth': '1' },
+                        cache: 'no-store',
                         signal: controller.signal
                     });
                     clearTimeout(timeoutId);
+                } catch (e) {
+                    if (e.name === 'AbortError') throw new Error('Request Timeout (15s)');
+                    throw new Error(`Network/CORS Error: ${e.message}`);
+                }
 
-                    if (!response.ok) throw new Error(`WebDAV Error: ${response.status} ${response.statusText}`);
+                if (!response.ok) throw new Error(`WebDAV Error: ${response.status} ${response.statusText}`);
 
-                    const text = await response.text();
-                    const parser = new DOMParser();
-                    const xml = parser.parseFromString(text, "text/xml");
-                    
-                    // Use getElementsByTagName to handle XML Namespaces (e.g. d:response) gracefully
-                    // HTML collection to Array
-                    let responses = Array.from(xml.getElementsByTagName('response'));
-                    if (responses.length === 0) {
-                        // Try with namespace if needed, or check for 'd:response' if standard fails in some parsers
-                        responses = Array.from(xml.getElementsByTagNameNS('*', 'response'));
+                const text = await response.text();
+                const parser = new DOMParser();
+                const xml = parser.parseFromString(text, "text/xml");
+
+                // Helper for Namespace-agnostic selection
+                const getLocalName = (node) => node.localName || node.nodeName.split(':').pop();
+                
+                const responses = [];
+                const allNodes = xml.getElementsByTagName('*');
+                for (let i = 0; i < allNodes.length; i++) {
+                    if (getLocalName(allNodes[i]) === 'response') responses.push(allNodes[i]);
+                }
+                
+                const folders = [];
+                const files = [];
+
+                for (const resp of responses) {
+                    // Find href child
+                    let hrefEl = null;
+                    for (const child of resp.children) {
+                        if (getLocalName(child) === 'href') {
+                            hrefEl = child;
+                            break;
+                        }
                     }
+                    if (!hrefEl) continue;
+
+                    let href = hrefEl.textContent;
+                    let decodedHref = decodeURIComponent(href);
+                    
+                    let key = decodedHref;
+                    if (key.startsWith('http')) {
+                        try {
+                            key = new URL(key).pathname;
+                        } catch(e) {
+                            // keep key as is if invalid url
+                        }
+                    }
+                    
+                    // Normalize Key vs RootPath
+                    // Ensure rootPath has trailing slash for replacement
+                    const root = this.rootPath.endsWith('/') ? this.rootPath : this.rootPath + '/';
+                    if (key.startsWith(root)) {
+                        key = key.substring(root.length);
+                    } else if (this.rootPath !== '/' && key.startsWith(this.rootPath)) {
+                        // Handle case where rootPath might not have trailing slash in match
+                        key = key.substring(this.rootPath.length);
+                    }
+                    
+                    if (key.startsWith('/')) key = key.substring(1);
+                    
+                    // Skip self or parent
+                    if (key === '' || key === path) continue;
+
+                    // Find propstat -> prop
+                    let prop = null;
+                    const findChild = (parent, name) => {
+                        for (const child of parent.children) {
+                            if (getLocalName(child) === name) return child;
+                        }
+                        return null;
+                    };
+
+                    const propstat = findChild(resp, 'propstat');
+                    if (propstat) {
+                        const propEl = findChild(propstat, 'prop');
+                        if (propEl) prop = propEl;
+                    }
+
+                    if (!prop) continue;
+
+                    const resType = findChild(prop, 'resourcetype');
+                    const isCollection = (resType && findChild(resType, 'collection')) || key.endsWith('/');
+                    const lastModStr = findChild(prop, 'getlastmodified')?.textContent;
+                    const lengthStr = findChild(prop, 'getcontentlength')?.textContent;
+
+                    if (isCollection) {
+                        if (!key.endsWith('/')) key += '/';
+                        folders.push({ Prefix: key });
+                    } else {
+                        files.push({
+                            Key: key,
+                            LastModified: lastModStr ? new Date(lastModStr) : new Date(),
+                            Size: lengthStr ? parseInt(lengthStr) : 0
+                        });
+                    }
+                }
+                return { CommonPrefixes: folders, Contents: files, KeyCount: files.length };
+            }
                     if (responses.length === 0) {
                          // Fallback for simple tag matching just in case
                          responses = Array.from(xml.querySelectorAll('response'));

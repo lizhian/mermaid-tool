@@ -1001,13 +1001,33 @@
         }
 
         async function handleSave(silent = false) {
+            let markdown = generateMarkdown();
+
+            // Native File System Logic
+            if (state.currentFile.type === 'native' && state.currentFile.handle) {
+                try {
+                    const writable = await state.currentFile.handle.createWritable();
+                    await writable.write(markdown);
+                    await writable.close();
+                    
+                    state.lastSavedContent = markdown;
+                    state.lastSaveTime = new Date();
+                    updateSaveTimeDisplay();
+                    if (!silent) showNotification('保存成功 (本地文件)', 'success');
+                    return;
+                } catch (err) {
+                    console.error('Native Save Error:', err);
+                    if (!silent) showNotification('保存失败: ' + err.message, 'error');
+                    return;
+                }
+            }
+
+            // Remote (S3/WebDAV) Logic
             if (!remoteStorage.isReady()) {
                 openS3ConfigModal();
                 showNotification('请先配置远程存储', 'info');
                 return;
             }
-
-            let markdown = generateMarkdown();
 
             // Change Detection (Skip if identical)
             if (state.currentFile.type === 's3' && markdown === state.lastSavedContent) {
@@ -1084,7 +1104,7 @@
                 state.tabs = [];
                 state.tabCounter = 0;
                 state.activeTabId = null;
-                state.currentFile = { type: 'local', key: null, backupCount: 0 };
+                state.currentFile = { type: 'local', key: null, backupCount: 0, handle: null }; // Reset handle
                 state.lastSavedContent = '';
                 state.lastSaveTime = null;
                 updateSaveTimeDisplay();
@@ -1093,6 +1113,64 @@
                 await addNewTab();
                 updateFooterUI();
                 showNotification('已新建文件 (本地)', 'success');
+            }
+        }
+
+        async function handleOpenLocal() {
+            if (!window.showOpenFilePicker) {
+                showNotification('您的浏览器不支持 File System Access API (请使用 Chrome/Edge)', 'error');
+                return;
+            }
+
+            try {
+                // If we have unsaved changes? Maybe warn?
+                // For now, assume user knows what they are doing or we can reuse showConfirm if dirty?
+                // But let's keep it simple.
+                
+                const [fileHandle] = await window.showOpenFilePicker({
+                    types: [{
+                        description: 'Markdown Files',
+                        accept: { 'text/markdown': ['.md', '.txt'] }
+                    }],
+                    excludeAcceptAllOption: false,
+                    multiple: false
+                });
+
+                const file = await fileHandle.getFile();
+                const content = await file.text();
+
+                // Clear current state
+                state.tabs = [];
+                state.tabCounter = 0;
+                
+                // Import content
+                document.getElementById('importContent').value = content;
+                await importMarkdown(true, true); // isSilent=true, isInit=true(to avoid s3 specific logic?) actually isInit just suppresses "Loaded" msg sometimes?
+
+                // Update State
+                state.currentFile = { 
+                    type: 'native', 
+                    key: file.name, 
+                    backupCount: 0, 
+                    handle: fileHandle 
+                };
+                
+                state.lastSavedContent = generateMarkdown();
+                state.lastSaveTime = new Date(file.lastModified);
+                updateSaveTimeDisplay();
+                
+                // We don't persist handle to localStorage because permissions are revoked on reload usually
+                // But we could try? For now, keep it simple: session only.
+                localStorage.removeItem(CONSTANTS.LAST_FILE_KEY); // Clear S3 auto-load
+
+                updateFooterUI();
+                showNotification(`已打开文件: ${file.name}`, 'success');
+
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    console.error('Open Local Error:', err);
+                    showNotification('打开文件失败: ' + err.message, 'error');
+                }
             }
         }
 
@@ -2519,6 +2597,7 @@
             document.getElementById('closeS3ListModal').addEventListener('click', closeS3ListModal);
 
             // Footer Events
+            document.getElementById('footerOpenLocalBtn').addEventListener('click', handleOpenLocal);
             document.getElementById('fileStatusDisplay').addEventListener('click', () => {
                 let targetPath = null;
 
@@ -2890,6 +2969,12 @@
                         <span id="lastSavedTime" class="text-gray-400 text-[10px] ml-3 hidden sm:inline-block"></span>
                     </div>
                     <div class="flex items-center space-x-2">
+                        <button id="footerOpenLocalBtn"
+                            class="flex items-center space-x-1 text-gray-600 hover:text-blue-600 px-2 py-1 rounded hover:bg-gray-100 transition"
+                            title="打开本地文件">
+                            <i class="fas fa-folder-open"></i>
+                            <span>打开</span>
+                        </button>
                         <button id="footerNewBtn"
                             class="hidden flex items-center space-x-1 text-gray-600 hover:text-primary px-2 py-1 rounded hover:bg-gray-100 transition"
                             title="新建文件">

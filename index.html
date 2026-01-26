@@ -457,13 +457,26 @@
 
         async function tryAutoLoadLastFile() {
             const lastFileKey = localStorage.getItem(CONSTANTS.LAST_FILE_KEY);
-            if (lastFileKey && state.s3Config) {
+            if (!lastFileKey) return;
+
+            // If not ready (e.g. Native FS needs manual reconnect), skip auto-load
+            if (!remoteStorage.isReady()) {
+                if (state.s3Config && state.s3Config.type === 'native') {
+                    console.log('Skipping auto-load for Native FS (requires manual reconnect)');
+                    // Optional: Show a hint to the user?
+                    // showNotification('请重新连接本地文件夹以恢复工作', 'info');
+                }
+                return;
+            }
+
+            if (state.s3Config) {
                 console.log('Attempting to restore last session:', lastFileKey);
-                // We reuse loadS3File logic but need to be careful about UI feedback during init
                 try {
                     await loadS3File(lastFileKey, true); // true = silent/init mode
                 } catch (e) {
                     console.error('Failed to auto-load last file', e);
+                    // Don't remove key immediately if it's just a network error?
+                    // But if it fails, maybe safer to clear it.
                     localStorage.removeItem(CONSTANTS.LAST_FILE_KEY);
                 }
             }

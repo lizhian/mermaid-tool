@@ -30,9 +30,8 @@
             MIN_ZOOM: 0.3,
             MAX_ZOOM: 5,
             DB_NAME: 'MermaidEditorDB',
-            DB_VERSION: 2,
+            DB_VERSION: 1,
             STORE_NAME: 'tabs',
-            HANDLE_STORE_NAME: 'handles',
             S3_CONFIG_KEY: 'mermaid_editor_s3_config',
             LAST_FILE_KEY: 'mermaid_editor_last_file',
             DEFAULT_MAX_BACKUPS: 10,
@@ -126,159 +125,14 @@
             }
         }
 
-        class NativeFSProvider extends StorageProvider {
-            constructor(handle) {
-                super({});
-                this.rootHandle = handle;
-            }
-
-            async _resolveHandle(path, create = false) {
-                const parts = path.split('/').filter(p => p);
-                let current = this.rootHandle;
-                
-                for (let i = 0; i < parts.length - 1; i++) {
-                    current = await current.getDirectoryHandle(parts[i], { create });
-                }
-
-                const name = parts[parts.length - 1];
-                if (!name) return current;
-
-                if (path.endsWith('/')) {
-                     return await current.getDirectoryHandle(name, { create });
-                } else {
-                     return await current.getFileHandle(name, { create });
-                }
-            }
-
-            async list(prefix) {
-                let dirHandle = this.rootHandle;
-                let dirPath = prefix || '';
-                
-                if (dirPath && !dirPath.endsWith('/')) {
-                    dirPath += '/';
-                }
-
-                try {
-                    if (dirPath && dirPath !== '/') {
-                        const parts = dirPath.split('/').filter(p => p);
-                        for (const part of parts) {
-                            dirHandle = await dirHandle.getDirectoryHandle(part);
-                        }
-                    }
-                } catch (e) {
-                    return { CommonPrefixes: [], Contents: [] };
-                }
-
-                const folders = [];
-                const files = [];
-
-                for await (const [name, handle] of dirHandle.entries()) {
-                    if (name.startsWith('.')) continue;
-
-                    const key = (dirPath || '') + name;
-
-                    if (handle.kind === 'directory') {
-                         folders.push({ Prefix: key + '/' });
-                    } else {
-                         const file = await handle.getFile();
-                         files.push({
-                             Key: key,
-                             LastModified: new Date(file.lastModified),
-                             Size: file.size
-                         });
-                    }
-                }
-
-                return { CommonPrefixes: folders, Contents: files, KeyCount: files.length };
-            }
-
-            async get(key) {
-                 const handle = await this._resolveHandle(key);
-                 const file = await handle.getFile();
-                 return {
-                     body: await file.text(),
-                     lastModified: new Date(file.lastModified),
-                     size: file.size
-                 };
-            }
-
-            async put(key, body) {
-                 const handle = await this._resolveHandle(key, true);
-                 const writable = await handle.createWritable();
-                 await writable.write(body);
-                 await writable.close();
-            }
-
-            async delete(key) {
-                 const parts = key.split('/').filter(p => p);
-                 const name = parts.pop();
-                 let current = this.rootHandle;
-                 for (const part of parts) {
-                     current = await current.getDirectoryHandle(part);
-                 }
-                 await current.removeEntry(name);
-            }
-
-            async deleteMany(keys) {
-                for (const k of keys) await this.delete(k.Key || k);
-            }
-
-            async copy(source, target) {
-                 const data = await this.get(source);
-                 await this.put(target, data.body);
-            }
-        }
-
         const remoteStorage = {
             provider: null,
             init(config) {
-                if (!config) return;
-                if (config.type === 's3') {
+                if (config) {
                     this.provider = new S3StorageProvider(config);
                 }
-                // Native provider is not auto-initialized from config string alone
-                // It requires a fresh handle via connectLocalFolder
             },
-            connectLocalFolder(handle) {
-                this.provider = new NativeFSProvider(handle);
-            },
-            isReady() { 
-                if (!this.provider) return false;
-                if (this.provider instanceof S3StorageProvider) return !!this.provider.client;
-                if (this.provider instanceof NativeFSProvider) return !!this.provider.rootHandle;
-                return false;
-            }
-        };
-
-        // --- App Namespace (Core Logic) ---
-        const App = {
-            init: async function() {
-                mermaid.initialize({
-                    startOnLoad: false,
-                    theme: 'default',
-                    flowchart: { useMaxWidth: true, curve: 'basis' },
-                    securityLevel: 'loose'
-                });
-
-                await initTabs();
-                await initS3(); // Wait for storage to init
-                initUIConfig();
-                initResizeDrag();
-                initEditor();
-                bindEvents();
-                initPanZoom();
-                renderMermaid();
-
-                await tryAutoLoadLastFile();
-
-                if (!state.isAutoSaveSetup) {
-                    setupAutoSave();
-                    state.isAutoSaveSetup = true;
-                }
-
-                updateFooterUI();
-                setInterval(updateSaveTimeDisplay, 60000);
-            }
+            isReady() { return !!this.provider && !!this.provider.client; }
         };
 
         const INITIAL_CODE = `flowchart TD
@@ -389,39 +243,7 @@
                         const store = database.createObjectStore(CONSTANTS.STORE_NAME, { keyPath: 'id' });
                         store.createIndex('name', 'name', { unique: false });
                     }
-                    if (!database.objectStoreNames.contains(CONSTANTS.HANDLE_STORE_NAME)) {
-                        database.createObjectStore(CONSTANTS.HANDLE_STORE_NAME, { keyPath: 'id' });
-                    }
                 };
-            });
-        }
-
-        function saveHandleToDB(handle) {
-            if (!db) return Promise.resolve();
-            return new Promise((resolve, reject) => {
-                const transaction = db.transaction([CONSTANTS.HANDLE_STORE_NAME], 'readwrite');
-                const store = transaction.objectStore(CONSTANTS.HANDLE_STORE_NAME);
-                const request = store.put({ id: 'root', handle: handle });
-                request.onsuccess = () => resolve();
-                request.onerror = () => reject(request.error);
-            });
-        }
-
-        function loadHandleFromDB() {
-            if (!db) return Promise.resolve(null);
-            return new Promise((resolve, reject) => {
-                try {
-                    const transaction = db.transaction([CONSTANTS.HANDLE_STORE_NAME], 'readonly');
-                    const store = transaction.objectStore(CONSTANTS.HANDLE_STORE_NAME);
-                    const request = store.get('root');
-                    request.onsuccess = () => resolve(request.result ? request.result.handle : null);
-                    request.onerror = () => {
-                        console.warn("Failed to load handle from DB (store might not exist yet)");
-                        resolve(null);
-                    };
-                } catch(e) {
-                    resolve(null);
-                }
             });
         }
 
@@ -449,7 +271,37 @@
         }
 
         // --- Initialization ---
-        document.addEventListener('DOMContentLoaded', App.init);
+        document.addEventListener('DOMContentLoaded', async function () {
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: 'default',
+                flowchart: { useMaxWidth: true, curve: 'basis' },
+                securityLevel: 'loose'
+            });
+
+            await initTabs();
+            initS3();
+            initUIConfig();
+            initResizeDrag();
+            initEditor();
+            bindEvents();
+            initPanZoom();
+            renderMermaid();
+
+            // Auto-load last file if configured
+            await tryAutoLoadLastFile();
+
+            // Setup Auto Save (Idle)
+            if (!state.isAutoSaveSetup) {
+                setupAutoSave();
+                state.isAutoSaveSetup = true;
+            }
+
+            updateFooterUI();
+
+            // Start Save Time Updater
+            setInterval(updateSaveTimeDisplay, 60000);
+        });
 
         function updateSaveTimeDisplay() {
             const el = document.getElementById('lastSavedTime');
@@ -491,54 +343,17 @@
 
         async function tryAutoLoadLastFile() {
             const lastFileKey = localStorage.getItem(CONSTANTS.LAST_FILE_KEY);
-            if (!lastFileKey) return;
-
-            // If not ready (e.g. Native FS needs manual reconnect), skip auto-load
-            // BUT: If it IS ready (handle restored), we might still need permission check
-            if (!remoteStorage.isReady()) {
-                if (state.s3Config && state.s3Config.type === 'native') {
-                    console.log('Native FS not ready (handle missing)');
-                }
-                return;
-            }
-
-            if (state.s3Config) {
+            if (lastFileKey && state.s3Config) {
                 console.log('Attempting to restore last session:', lastFileKey);
-                
-                // Permission Check for Native FS
-                if (state.s3Config.type === 'native' && remoteStorage.provider.rootHandle) {
-                    const handle = remoteStorage.provider.rootHandle;
-                    const opts = { mode: 'readwrite' };
-                    if ((await handle.queryPermission(opts)) !== 'granted') {
-                        // We can't request permission here (no gesture).
-                        // Show a notification asking user to verify.
-                        const verifyBtn = document.createElement('button');
-                        verifyBtn.textContent = '验证权限';
-                        verifyBtn.className = 'bg-white text-primary px-2 py-1 rounded ml-2 border border-primary text-xs';
-                        verifyBtn.onclick = async () => {
-                            if ((await handle.requestPermission(opts)) === 'granted') {
-                                showNotification('权限已验证，正在加载...', 'success');
-                                tryAutoLoadLastFile(); // Retry
-                            }
-                        };
-                        
-                        UI.showNotificationWithAction('请验证本地文件夹访问权限', verifyBtn);
-                        return; // Stop auto-load until verified
-                    }
-                }
-
+                // We reuse loadS3File logic but need to be careful about UI feedback during init
                 try {
                     await loadS3File(lastFileKey, true); // true = silent/init mode
                 } catch (e) {
                     console.error('Failed to auto-load last file', e);
-                    // Don't remove key immediately if it's just a network error?
-                    // But if it fails, maybe safer to clear it.
                     localStorage.removeItem(CONSTANTS.LAST_FILE_KEY);
                 }
             }
         }
-
-
 
         async function initTabs() {
             try {
@@ -591,25 +406,11 @@
         }
 
         // --- S3 System ---
-        async function initS3() {
+        function initS3() {
             const savedConfig = localStorage.getItem(CONSTANTS.S3_CONFIG_KEY);
             if (savedConfig) {
                 state.s3Config = JSON.parse(savedConfig);
-                
-                if (state.s3Config.type === 'native') {
-                    // Try to restore handle from DB
-                    try {
-                        const handle = await loadHandleFromDB();
-                        if (handle) {
-                            remoteStorage.connectLocalFolder(handle);
-                            console.log("Restored Native FS handle from DB");
-                        }
-                    } catch(e) {
-                        console.error("Failed to restore native handle", e);
-                    }
-                } else {
-                    updateS3Client();
-                }
+                updateS3Client();
             }
         }
 
@@ -624,260 +425,64 @@
             state.uiConfig.exportFormat = document.getElementById('uiExportFormat').value;
             saveUIConfig();
             
-            // Storage Config
-            const type = document.getElementById('storageType').value;
+            // Update button label dynamically if needed, or just rely on click handler reading state
+            
+            // S3 Config
+            const endpoint = document.getElementById('s3Endpoint').value.trim();
+            const region = document.getElementById('s3Region').value.trim();
+            const accessKeyId = document.getElementById('s3AccessKey').value.trim();
+            const secretAccessKey = document.getElementById('s3SecretKey').value.trim();
+            const bucket = document.getElementById('s3Bucket').value.trim();
             const maxBackups = parseInt(document.getElementById('s3MaxBackups').value.trim()) || CONSTANTS.DEFAULT_MAX_BACKUPS;
             const enableAutoSave = document.getElementById('s3EnableAutoSave').checked;
             const idleTime = parseInt(document.getElementById('s3IdleTime').value.trim()) || CONSTANTS.DEFAULT_IDLE_TIME;
 
-            let config = { type, maxBackups, enableAutoSave, idleTime, prefix: '' };
-
-            if (type === 's3') {
-                const endpoint = document.getElementById('s3Endpoint').value.trim();
-                const region = document.getElementById('s3Region').value.trim();
-                const accessKeyId = document.getElementById('s3AccessKey').value.trim();
-                const secretAccessKey = document.getElementById('s3SecretKey').value.trim();
-                const bucket = document.getElementById('s3Bucket').value.trim();
-
-                if (!accessKeyId || !secretAccessKey || !bucket) {
-                    showNotification('请填写必填项 (Access Key, Secret Key, Bucket)', 'error');
-                    return;
-                }
-                config = { ...config, endpoint, region, accessKeyId, secretAccessKey, bucket };
+            if (!accessKeyId || !secretAccessKey || !bucket) {
+                showNotification('请填写必填项 (Access Key, Secret Key, Bucket)', 'error');
+                return;
             }
 
-            state.s3Config = config;
+            // Prefix removed, default to empty
+            state.s3Config = { endpoint, region, accessKeyId, secretAccessKey, bucket, prefix: '', maxBackups, enableAutoSave, idleTime };
             localStorage.setItem(CONSTANTS.S3_CONFIG_KEY, JSON.stringify(state.s3Config));
-            updateS3Client(); // This only inits S3. Native needs manual connect.
+            updateS3Client();
             
             closeS3ConfigModal();
-            showNotification('配置已保存', 'success');
+            showNotification('S3 配置已保存', 'success');
             
+            // Re-init auto save with new settings
             setupAutoSave();
         }
 
-        async function selectLocalFolder() {
-             if (!window.showDirectoryPicker) {
-                 showNotification('您的浏览器不支持文件夹访问 API', 'error');
-                 return;
-             }
-             try {
-                 const handle = await window.showDirectoryPicker();
-                 remoteStorage.connectLocalFolder(handle);
-                 await saveHandleToDB(handle);
-                 
-                 // Update UI to show connected
-                 document.getElementById('nativeFolderStatus').textContent = `已连接: ${handle.name}`;
-                 document.getElementById('nativeFolderStatus').className = "text-xs text-green-600 font-medium mt-1";
-                 
-                 // Auto-save type preference
-                 document.getElementById('storageType').value = 'native';
-                 updateStorageFormUI('native');
-                 
-             } catch (e) {
-                 if (e.name !== 'AbortError') {
-                     showNotification('选择文件夹失败: ' + e.message, 'error');
-                 }
-             }
-        }
+        // --- S3 UI Handlers ---
+        function openS3ConfigModal() {
+            const modal = document.getElementById('s3ConfigModal');
+            document.querySelector('#s3ConfigModal h3').textContent = '设置'; // Rename Title
 
-        // --- UI Namespace ---
-        const UI = {
-            showNotification: function(msg, type = 'info') {
-                const notification = document.createElement('div');
-                const colors = {
-                    info: 'bg-blue-500',
-                    success: 'bg-green-500',
-                    error: 'bg-red-500',
-                    warning: 'bg-yellow-500'
-                };
-                const colorClass = colors[type] || colors.info;
+            // Load UI Config
+            document.getElementById('uiCopyFormat').value = state.uiConfig.copyFormat || 'png';
+            document.getElementById('uiExportFormat').value = state.uiConfig.exportFormat || 'png';
 
-                notification.className = `fixed bottom-4 right-4 ${colorClass} text-white px-4 py-2 rounded shadow-lg z-50 flex items-center transition-opacity duration-300 opacity-0 transform translate-y-2`;
-                notification.innerHTML = `
-                    <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'} mr-2"></i>
-                    <span>${msg}</span>
-                `;
-
-                document.body.appendChild(notification);
-
-                // Animation
-                requestAnimationFrame(() => {
-                    notification.classList.remove('opacity-0', 'translate-y-2');
-                });
-
-                setTimeout(() => {
-                    notification.classList.add('opacity-0', 'translate-y-2');
-                    setTimeout(() => notification.remove(), 300);
-                }, 3000);
-            },
-
-            showConfirm: function(message, options = {}) {
-                return new Promise((resolve) => {
-                    const modal = document.getElementById('customConfirmModal');
-                    const titleEl = document.getElementById('confirmTitle');
-                    const msgEl = document.getElementById('confirmMessage');
-                    const okBtn = document.getElementById('confirmOkBtn');
-                    const cancelBtn = document.getElementById('confirmCancelBtn');
-
-                    titleEl.textContent = options.title || '确认';
-                    msgEl.textContent = message;
-
-                    if (options.danger) {
-                        okBtn.className = "px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition";
-                        okBtn.textContent = "删除";
-                    } else {
-                        okBtn.className = "px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition";
-                        okBtn.textContent = "确定";
-                    }
-
-                    modal.classList.remove('hidden');
-
-                    const cleanup = () => {
-                        modal.classList.add('hidden');
-                        okBtn.onclick = null;
-                        cancelBtn.onclick = null;
-                    };
-
-                    okBtn.onclick = () => {
-                        cleanup();
-                        resolve(true);
-                    };
-
-                    cancelBtn.onclick = () => {
-                        cleanup();
-                        resolve(false);
-                    };
-                });
-            },
-
-            showPrompt: function(title, defaultValue = '') {
-                return new Promise((resolve) => {
-                    const modal = document.getElementById('customPromptModal');
-                    const titleEl = document.getElementById('promptTitle');
-                    const inputEl = document.getElementById('promptInput');
-                    const okBtn = document.getElementById('promptOkBtn');
-                    const cancelBtn = document.getElementById('promptCancelBtn');
-
-                    titleEl.textContent = title;
-                    inputEl.value = defaultValue;
-
-                    modal.classList.remove('hidden');
-                    inputEl.focus();
-
-                    const cleanup = () => {
-                        modal.classList.add('hidden');
-                        okBtn.onclick = null;
-                        cancelBtn.onclick = null;
-                        inputEl.onkeydown = null;
-                    };
-
-                    const handleOk = () => {
-                        const val = inputEl.value.trim();
-                        cleanup();
-                        if (val) resolve(val);
-                        else resolve(null);
-                    };
-
-                    okBtn.onclick = handleOk;
-
-                    cancelBtn.onclick = () => {
-                        cleanup();
-                        resolve(null);
-                    };
-
-                    inputEl.onkeydown = (e) => {
-                        if (e.key === 'Enter') handleOk();
-                        if (e.key === 'Escape') {
-                            cleanup();
-                            resolve(null);
-                        }
-                    };
-                });
-            },
-            
-            showNotificationWithAction: function(msg, actionBtn) {
-                const notification = document.createElement('div');
-                notification.className = `fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center transition-opacity duration-300`;
-                notification.innerHTML = `<span>${msg}</span>`;
-                notification.appendChild(actionBtn);
+            if (state.s3Config) {
+                document.getElementById('s3Endpoint').value = state.s3Config.endpoint || '';
+                document.getElementById('s3Region').value = state.s3Config.region || '';
+                document.getElementById('s3AccessKey').value = state.s3Config.accessKeyId || '';
+                document.getElementById('s3SecretKey').value = state.s3Config.secretAccessKey || '';
+                document.getElementById('s3Bucket').value = state.s3Config.bucket || '';
+                document.getElementById('s3MaxBackups').value = state.s3Config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
                 
-                const close = document.createElement('button');
-                close.innerHTML = '<i class="fas fa-times"></i>';
-                close.className = 'ml-3 text-blue-200 hover:text-white';
-                close.onclick = () => notification.remove();
-                notification.appendChild(close);
-
-                document.body.appendChild(notification);
-            },
-            
-            openSettings: function() {
-                const modal = document.getElementById('s3ConfigModal');
-                document.querySelector('#s3ConfigModal h3').textContent = '存储配置';
-
-                // Load UI Config
-                document.getElementById('uiCopyFormat').value = state.uiConfig.copyFormat || 'png';
-                document.getElementById('uiExportFormat').value = state.uiConfig.exportFormat || 'png';
-
-                const config = state.s3Config || {};
-                const type = config.type || 's3'; // default s3
-                
-                // Set values
-                const typeSelect = document.getElementById('storageType');
-                typeSelect.value = type;
-                updateStorageFormUI(type);
-
-                document.getElementById('s3Endpoint').value = config.endpoint || '';
-                document.getElementById('s3Region').value = config.region || '';
-                document.getElementById('s3AccessKey').value = config.accessKeyId || '';
-                document.getElementById('s3SecretKey').value = config.secretAccessKey || '';
-                document.getElementById('s3Bucket').value = config.bucket || '';
-
-                document.getElementById('s3MaxBackups').value = config.maxBackups || CONSTANTS.DEFAULT_MAX_BACKUPS;
-                const enableAutoSave = config.enableAutoSave !== undefined ? config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
+                const enableAutoSave = state.s3Config.enableAutoSave !== undefined ? state.s3Config.enableAutoSave : CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
                 document.getElementById('s3EnableAutoSave').checked = enableAutoSave;
-                document.getElementById('s3IdleTime').value = config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
-                toggleIdleTimeInput(enableAutoSave);
+                document.getElementById('s3IdleTime').value = state.s3Config.idleTime || CONSTANTS.DEFAULT_IDLE_TIME;
                 
-                // Native status
-                const statusEl = document.getElementById('nativeFolderStatus');
-                if (remoteStorage.provider instanceof NativeFSProvider && remoteStorage.provider.rootHandle) {
-                     statusEl.textContent = `已连接: ${remoteStorage.provider.rootHandle.name}`;
-                     statusEl.className = "text-xs text-green-600 font-medium mt-1";
-                } else {
-                     statusEl.textContent = "未连接";
-                     statusEl.className = "text-xs text-gray-400 mt-1";
-                }
-
-                modal.classList.remove('hidden');
-            }
-        };
-
-        // Backwards compatibility for now (or update all callsites in next step)
-        const showNotification = UI.showNotification;
-        const showConfirm = UI.showConfirm;
-        const showPrompt = UI.showPrompt;
-
-        // ... existing code ...
-
-        // Update bindEvents to use UI.openSettings
-        function bindEvents() {
-            // ...
-            document.getElementById('s3ConfigBtn').addEventListener('click', UI.openSettings);
-            // ...
-        }
-
-        
-        function updateStorageFormUI(type) {
-            const s3 = document.getElementById('s3Fields');
-            const native = document.getElementById('nativeFields');
-            if (type === 's3') {
-                s3.classList.remove('hidden');
-                native.classList.add('hidden');
+                toggleIdleTimeInput(enableAutoSave);
             } else {
-                s3.classList.add('hidden');
-                native.classList.remove('hidden');
+                 document.getElementById('s3MaxBackups').value = CONSTANTS.DEFAULT_MAX_BACKUPS;
+                 document.getElementById('s3EnableAutoSave').checked = CONSTANTS.DEFAULT_ENABLE_AUTOSAVE;
+                 document.getElementById('s3IdleTime').value = CONSTANTS.DEFAULT_IDLE_TIME;
+                 toggleIdleTimeInput(CONSTANTS.DEFAULT_ENABLE_AUTOSAVE);
             }
+            modal.classList.remove('hidden');
         }
 
         function toggleIdleTimeInput(show) {
@@ -1753,8 +1358,74 @@
         }
 
         // --- Helpers ---
-        // showConfirm and showPrompt moved to UI namespace
-        
+        function showConfirm(message, options = {}) {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('customConfirmModal');
+                const titleEl = document.getElementById('confirmTitle');
+                const msgEl = document.getElementById('confirmMessage');
+                const okBtn = document.getElementById('confirmOkBtn');
+                const cancelBtn = document.getElementById('confirmCancelBtn');
+
+                titleEl.textContent = options.title || '确认';
+                msgEl.textContent = message;
+
+                if (options.danger) {
+                    okBtn.className = 'px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition';
+                } else {
+                    okBtn.className = 'px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition';
+                }
+
+                const close = (result) => {
+                    modal.classList.add('hidden');
+                    okBtn.onclick = null;
+                    cancelBtn.onclick = null;
+                    resolve(result);
+                };
+
+                okBtn.onclick = () => close(true);
+                cancelBtn.onclick = () => close(false);
+
+                modal.classList.remove('hidden');
+            });
+        }
+
+        function showPrompt(title, defaultValue = '') {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('customPromptModal');
+                const titleEl = document.getElementById('promptTitle');
+                const inputEl = document.getElementById('promptInput');
+                const okBtn = document.getElementById('promptOkBtn');
+                const cancelBtn = document.getElementById('promptCancelBtn');
+
+                titleEl.textContent = title;
+                inputEl.value = defaultValue;
+
+                const close = (value) => {
+                    modal.classList.add('hidden');
+                    okBtn.onclick = null;
+                    cancelBtn.onclick = null;
+                    inputEl.onkeydown = null;
+                    resolve(value);
+                };
+
+                const submit = () => {
+                    const val = inputEl.value.trim();
+                    if (val) close(val);
+                };
+
+                okBtn.onclick = submit;
+                cancelBtn.onclick = () => close(null);
+
+                inputEl.onkeydown = (e) => {
+                    if (e.key === 'Enter') submit();
+                    if (e.key === 'Escape') close(null);
+                };
+
+                modal.classList.remove('hidden');
+                setTimeout(() => inputEl.focus(), 100);
+            });
+        }
+
         function setupAutoScrollHide(el) {
             let timeout;
             el.addEventListener('scroll', () => {
@@ -2375,7 +2046,37 @@
             errorDiv.classList.remove('hidden');
         }
 
+        function showNotification(message, type = 'info') {
+            const existingNotification = document.getElementById('copyNotification');
+            if (existingNotification) existingNotification.remove();
 
+            const notification = document.createElement('div');
+            notification.id = 'copyNotification';
+            notification.className = `fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center space-x-3 transition-all duration-300 transform translate-y-0 opacity-100 ${type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' :
+                type === 'error' ? 'bg-red-50 border border-red-200 text-red-800' :
+                    'bg-blue-50 border border-blue-200 text-blue-800'
+                }`;
+
+            const icon = document.createElement('i');
+            icon.className = type === 'success' ? 'fas fa-check-circle text-green-500' :
+                type === 'error' ? 'fas fa-exclamation-circle text-red-500' : 'fas fa-info-circle text-blue-500';
+
+            const messageSpan = document.createElement('span');
+            messageSpan.className = 'font-medium';
+            messageSpan.textContent = message;
+
+            notification.appendChild(icon);
+            notification.appendChild(messageSpan);
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.style.opacity = '0';
+                    notification.style.transform = 'translateY(-20px)';
+                    setTimeout(() => notification.remove(), 300);
+                }
+            }, 3000);
+        }
 
 
 
@@ -2579,7 +2280,7 @@
             document.getElementById('overrideImportBtn').addEventListener('click', () => importMarkdown(true));
 
             // S3 Events
-            document.getElementById('s3ConfigBtn').addEventListener('click', UI.openSettings);
+            document.getElementById('s3ConfigBtn').addEventListener('click', openS3ConfigModal);
             document.getElementById('closeS3ConfigModal').addEventListener('click', closeS3ConfigModal);
             document.getElementById('saveS3ConfigBtn').addEventListener('click', saveS3Config);
             document.getElementById('closeS3ListModal').addEventListener('click', closeS3ListModal);
@@ -3169,63 +2870,34 @@
             </div>
             <div class="p-4 space-y-3">
                 <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">存储类型</label>
-                    <select id="storageType"
-                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent"
-                        onchange="updateStorageFormUI(this.value)">
-                        <option value="s3">AWS S3 / MinIO / OSS</option>
-                        <option value="native">本地文件夹同步 (Native File System)</option>
-                    </select>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
+                    <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
                 </div>
-
-                <!-- S3 Fields -->
-                <div id="s3Fields">
-                    <div class="space-y-3">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
-                            <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
-                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
-                            <input id="s3Region" type="text" placeholder="us-east-1"
-                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
-                                    class="text-red-500">*</span></label>
-                            <input id="s3AccessKey" type="text"
-                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
-                                    class="text-red-500">*</span></label>
-                            <input id="s3SecretKey" type="password"
-                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
-                                    class="text-red-500">*</span></label>
-                            <input id="s3Bucket" type="text"
-                                class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
-                        </div>
-                    </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
+                    <input id="s3Region" type="text" placeholder="us-east-1"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
                 </div>
-
-                <!-- Native Fields -->
-                <div id="nativeFields" class="hidden">
-                    <div class="bg-gray-50 border border-gray-200 rounded p-3 text-center">
-                        <p class="text-xs text-gray-600 mb-2">选择一个本地文件夹作为存储桶。文件将直接读写到您的硬盘。</p>
-                        <button onclick="selectLocalFolder()"
-                            class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-100 px-3 py-1.5 rounded text-xs font-medium transition shadow-sm">
-                            <i class="fas fa-folder-open mr-1 text-yellow-500"></i>
-                            选择/连接 文件夹
-                        </button>
-                        <div id="nativeFolderStatus" class="text-xs text-gray-400 mt-1">未连接</div>
-                    </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
+                            class="text-red-500">*</span></label>
+                    <input id="s3AccessKey" type="text"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
                 </div>
-
-                <div class="flex space-x-3 mt-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
+                            class="text-red-500">*</span></label>
+                    <input id="s3SecretKey" type="password"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
+                            class="text-red-500">*</span></label>
+                    <input id="s3Bucket" type="text"
+                        class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
+                </div>
+                <div class="flex space-x-3">
                     <div class="flex-1">
                         <label class="block text-xs font-medium text-gray-700 mb-1">最大备份数量</label>
                         <input id="s3MaxBackups" type="number" min="1" max="100" value="10"
@@ -3243,7 +2915,7 @@
                         class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:border-transparent">
                 </div>
                 <div class="text-xs text-yellow-600 bg-yellow-50 p-2 rounded border border-yellow-200">
-                    <i class="fas fa-exclamation-triangle mr-1"></i> 注意：密钥/权限仅保存在浏览器会话或本地存储中。
+                    <i class="fas fa-exclamation-triangle mr-1"></i> 注意：密钥将保存在浏览器本地存储中，请勿在公共设备上使用。
                 </div>
                 
                 <div class="border-t border-gray-200 pt-3 mt-3">

@@ -1,110 +1,73 @@
 # AGENTS.md
 
 ## Project Overview
-This is a sophisticated, single-file Serverless Mermaid Chart Editor. It allows users to create, edit, manage, and persist Mermaid diagrams entirely in the browser.
+This is a single-file Mermaid chart editor application written in HTML, CSS, and JavaScript. It functions as a client-side only application with no build system or external local dependencies (libraries are loaded via CDN).
 
-**Core Philosophy:**
-- **Zero Build Step:** The application must run directly from `index.html` without `npm install` or compilation.
-- **Client-Side Only:** No backend server. All persistence is handled via browser APIs (IndexedDB, File System Access) or direct API calls (S3, WebDAV).
-- **Dependency Minimalism:** Libraries are loaded via reliable CDNs (Tailwind, Mermaid, AWS SDK, Diff.js).
+## Architecture & State
+- **Single File**: All logic, styling, and markup reside in `index.html`.
+- **State Management**: A centralized `state` object manages application state:
+  ```javascript
+  const state = {
+      tabs: [],           // Array of tab objects {id, name, code}
+      activeTabId: null,  // Currently selected tab ID
+      currentCode: '',    // Current editor content
+      zoom: { level, translateX, translateY },
+      pan: { isPanning, startX, startY },
+      // ...
+  };
+  ```
+- **Persistence**: IndexedDB (`MermaidEditorDB`) is used to persist tabs and state across reloads.
+- **Rendering**: Mermaid.js renders the diagrams into an SVG within the preview area.
 
-## Environment & Setup
+## Build/Lint/Test Commands
+Since this is a no-build project, standard npm commands do not apply.
 
 ### Running the Application
-Since there is no build step, "deployment" is simply serving the file.
+- Open `index.html` directly in any modern web browser.
+- Or serve locally: `python3 -m http.server 8000`
 
-1.  **Direct Open:** Double-click `index.html` to open in Chrome/Edge/Firefox.
-2.  **Local Server (Recommended):**
-    ```bash
-    # Python 3
-    python3 -m http.server 8000
-    ```
-    Access at `http://localhost:8000`.
+### Testing
+- **Manual Testing**: Verify core features (Edit, Render, Zoom/Pan, Tabs, Export/Import) manually.
+- **Console**: Check browser console for errors. Use `console.error` for catching and logging issues.
 
-### Dependencies (CDN)
-- **Styling:** Tailwind CSS (v3.x)
-- **Core Logic:** Mermaid.js (v10.x)
-- **Remote Storage:** AWS SDK (v2.x)
-- **Diffing:** jsdiff (v5.x)
-- **Icons:** FontAwesome (v6.x)
-
-## Testing Strategy
-
-There is no automated test suite. Testing is manual and feature-based.
-
-### Manual Test Plans (Run these for verification)
-
-**1. Core Rendering**
-- **Action:** Paste `graph TD; A-->B;`.
-- **Expectation:** Preview pane updates immediately. No console errors.
-
-**2. Storage: S3 & WebDAV**
-- **Action:** Configure Settings (`#s3ConfigModal`). Select "S3" or "WebDAV".
-- **Action:** Click "Save" in footer.
-- **Expectation:** Notification "Saved successfully". File appears in remote bucket/folder.
-- **Verify:** Use the integrated "Cloud File Browser" (`#s3ListModal`) to see the file.
-
-**3. Storage: Local Native (FS Access)**
-- **Action:** Click "Open" (folder icon) in footer. Select a local `.md` file.
-- **Expectation:** File content loads. Footer shows "Native File: filename.md".
-- **Action:** Click "Save".
-- **Expectation:** Changes write directly to disk without a "Save As" prompt (after initial permission).
-
-**4. Image Export**
-- **Action:** Click "Export Image" -> "PNG".
-- **Expectation:** Downloaded PNG matches preview exactly (styles included).
+### Linting/Formatting
+- **Style**: Mimic the existing code style.
+- **Indentation**: 4 spaces for HTML structure, 4 spaces for JS logic (though mixing happens in HTML files, prefer consistency).
+- **Quotes**: Single quotes for JS strings, double quotes for HTML attributes.
 
 ## Code Style Guidelines
 
-### JavaScript (`<script>` block)
-- **Standard:** Modern ES6+. Use `const` over `let`. **Never** use `var`.
-- **Async/Await:** Prefer `async/await` for all storage/IO operations.
-- **Naming:** `camelCase` for JS, `UPPER_SNAKE_CASE` for Constants, `kebab-case` for HTML IDs.
-- **Formatting:** 4 spaces indentation. Single quotes for JS strings.
+### JavaScript Conventions
+- **ES6+**: Use `const`/`let`, arrow functions, async/await, and template literals.
+- **Naming**:
+  - Variables/Functions: `camelCase` (e.g., `updateEditorUI`, `handleTabDrop`)
+  - Constants: `UPPER_SNAKE_CASE` (e.g., `CONSTANTS.ZOOM_STEP`, `DB_NAME`)
+  - HTML IDs: `kebab-case` (e.g., `mermaidEditor`, `zoomInBtn`)
+- **Structure**:
+  - Group related logic (e.g., `// --- State Management ---`, `// --- Initialization ---`).
+  - Keep `init` functions at the top level of the script.
+  - Event listeners are bound in `bindEvents()`.
 
-### Architecture & Patterns
+### HTML/CSS
+- **Tailwind CSS**: Use Tailwind utility classes for styling. Avoid inline `style="..."` unless for dynamic values (like drag resizing).
+- **Layout**: Flexbox is heavily used for layout (`flex`, `flex-col`, `items-center`).
+- **Icons**: FontAwesome 6 (CDN) for UI icons.
+- **Layout Fixes**: Note `body { position: fixed; inset: 0; }` for preventing scroll bounce on mobile/Mac.
 
-#### 1. State Management
-All application state lives in the global `state` object.
-```javascript
-const state = {
-    tabs: [],
-    uiConfig: {},       // User prefs (formats, themes)
-    s3Config: {},       // Storage credentials (S3/WebDAV)
-    currentFile: {      // Active file metadata
-        type: 'local' | 's3' | 'webdav' | 'native',
-        key: 'path/to/file.md', // or filename for native
-        handle: FileSystemFileHandle // Only for 'native' type
-    }
-};
-```
+### Key Logic Patterns
+- **Event Handling**:
+  - Use `addEventListener` in `bindEvents`.
+  - For complex interactions (Drag/Drop, Pan/Zoom), encapsulate logic in handler functions or modules.
+  - **Pan/Zoom**: Unifies Mouse and Touch events. Zoom uses `transform: scale(...) translate(...)`.
+- **Database**:
+  - All DB operations return Promises.
+  - Use `state` to hold data in memory, sync to DB on changes.
 
-#### 2. Storage Abstraction (`StorageProvider`)
-Remote operations use the `StorageProvider` interface.
-- **Classes:** `S3StorageProvider`, `WebDAVStorageProvider`.
-- **Methods:** `list(path)`, `get(key)`, `put(key, body)`, `delete(key)`.
-- **WebDAV Note:** Uses a custom XML parser to handle namespaced responses (`d:response`) and `AbortController` for timeouts.
-
-#### 3. Native File System
-- **API:** Uses `window.showOpenFilePicker` and `FileSystemFileHandle`.
-- **Logic:** Handled separately in `handleOpenLocal` and `handleSave` (bypasses `StorageProvider`).
-
-#### 4. Image Pipeline
-- **Flow:** `SVG` -> `Clone` -> `Style Injection (Computed)` -> `XMLSerializer` -> `Image` -> `Canvas`.
-- **Critical:** Do not remove the style injection logic; it fixes "blank chart" issues in exports.
-
-### HTML & CSS
-- **Framework:** Tailwind CSS only. No custom CSS classes unless necessary for animation.
-- **Modals:** Use `fixed inset-0 z-50` overlays with distinct IDs.
-
-### Error Handling
-- **Async:** Always wrap `await` in `try/catch`.
-- **User Feedback:** Use `showNotification(msg, type)` ('error'|'success'|'info').
+## Security & Best Practices
+- **Input Handling**: Mermaid rendering handles some sanitization, but be cautious with user input.
+- **CDN**: Ensure CDN links are reliable (cdn.tailwindcss.com, cdn.jsdelivr.net).
+- **Error Handling**: Use `try-catch` blocks for async operations (rendering, DB, clipboard). Use `showNotification` or `showError` to inform the user.
 
 ## Git Workflow
-- **Branching:** Work on `main`.
-- **Commits:** Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`).
-
-## Future Roadmap
-1.  **Refactoring:** Split `index.html` into ES Modules (`src/main.js`, `src/storage/*.js`) to improve maintainability.
-2.  **Plugin System:** Allow custom Mermaid directives or rendering logic.
+- **Commits**: Use descriptive messages.
+- **Branching**: `main` is the primary branch.

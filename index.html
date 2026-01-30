@@ -5,7 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mermaid 图表编辑器</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='15' fill='%236366f1'/><circle cx='25' cy='30' r='10' fill='white'/><circle cx='75' cy='30' r='10' fill='white'/><circle cx='25' cy='70' r='10' fill='white'/><circle cx='75' cy='70' r='10' fill='white'/><path d='M35 30 L65 30' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M35 70 L65 70' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M25 40 L25 60' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M75 40 L75 60' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M35 40 L65 60' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M65 40 L35 60' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='15' fill='%236366f1'/><circle cx='25' cy='30' r='10' fill='white'/><circle cx='75' cy='30' r='10' fill='white'/><circle cx='25' cy='70' r='10' fill='white'/><circle cx='75' cy='70' r='10' fill='white'/><path d='M35 30 L65 30' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M35 70 L65 70' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M25 40 L25 60' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M75 40 L75 60' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M35 40 L65 60' stroke='white' stroke-width='3' stroke-linecap='round'/><path d='M65 40 L35 60' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -98,13 +99,13 @@
 
             async list(prefix) {
                 this._checkClient();
-                const params = {Bucket: this.bucket, Prefix: prefix, Delimiter: '/'};
+                const params = { Bucket: this.bucket, Prefix: prefix, Delimiter: '/' };
                 return this.client.listObjectsV2(params).promise();
             }
 
             async get(key) {
                 this._checkClient();
-                const data = await this.client.getObject({Bucket: this.bucket, Key: key}).promise();
+                const data = await this.client.getObject({ Bucket: this.bucket, Key: key }).promise();
                 return {
                     body: data.Body.toString('utf-8'),
                     lastModified: data.LastModified,
@@ -124,7 +125,7 @@
 
             async delete(key) {
                 this._checkClient();
-                return this.client.deleteObject({Bucket: this.bucket, Key: key}).promise();
+                return this.client.deleteObject({ Bucket: this.bucket, Key: key }).promise();
             }
 
             async deleteMany(keys) {
@@ -132,7 +133,7 @@
                 if (!keys || keys.length === 0) return;
                 return this.client.deleteObjects({
                     Bucket: this.bucket,
-                    Delete: {Objects: keys}
+                    Delete: { Objects: keys }
                 }).promise();
             }
 
@@ -147,7 +148,7 @@
 
             async head(key) {
                 this._checkClient();
-                return this.client.headObject({Bucket: this.bucket, Key: key}).promise();
+                return this.client.headObject({ Bucket: this.bucket, Key: key }).promise();
             }
         }
 
@@ -270,8 +271,8 @@
                 request.onupgradeneeded = (event) => {
                     const database = event.target.result;
                     if (!database.objectStoreNames.contains(CONSTANTS.STORE_NAME)) {
-                        const store = database.createObjectStore(CONSTANTS.STORE_NAME, {keyPath: 'id'});
-                        store.createIndex('name', 'name', {unique: false});
+                        const store = database.createObjectStore(CONSTANTS.STORE_NAME, { keyPath: 'id' });
+                        store.createIndex('name', 'name', { unique: false });
                     }
                 };
             });
@@ -305,7 +306,7 @@
             mermaid.initialize({
                 startOnLoad: false,
                 theme: 'default',
-                flowchart: {useMaxWidth: true, curve: 'basis'},
+                flowchart: { useMaxWidth: true, curve: 'basis' },
                 securityLevel: 'loose'
             });
 
@@ -450,7 +451,7 @@
             const savedConfig = localStorage.getItem(CONSTANTS.UI_CONFIG_KEY);
             if (savedConfig) {
                 try {
-                    state.uiConfig = {...state.uiConfig, ...JSON.parse(savedConfig)};
+                    state.uiConfig = { ...state.uiConfig, ...JSON.parse(savedConfig) };
                 } catch (e) {
                     console.error("Failed to parse UI config", e);
                 }
@@ -752,7 +753,7 @@
                         await Promise.all(copyPromises);
 
                         // Delete all old backups
-                        const objectsToDelete = backupList.Contents.map(f => ({Key: f.Key}));
+                        const objectsToDelete = backupList.Contents.map(f => ({ Key: f.Key }));
                         await remoteStorage.provider.deleteMany(objectsToDelete);
                     }
                 }
@@ -774,7 +775,7 @@
                 danger: true
             })) return;
             try {
-                const objectsToDelete = [{Key: key}];
+                const objectsToDelete = [{ Key: key }];
 
                 if (!isFolder && key.endsWith('.md')) {
                     // Calculate backup directory
@@ -786,7 +787,7 @@
 
                     const backupList = await remoteStorage.provider.list(backupDir);
                     if (backupList.Contents) {
-                        backupList.Contents.forEach(c => objectsToDelete.push({Key: c.Key}));
+                        backupList.Contents.forEach(c => objectsToDelete.push({ Key: c.Key }));
                     }
                 }
 
@@ -815,7 +816,7 @@
 
                 const content = data.body;
 
-                state.currentFile = {type: 's3', key: key, backupCount: 0};
+                state.currentFile = { type: 's3', key: key, backupCount: 0 };
                 state.tabs = [];
                 state.tabCounter = 0;
 
@@ -861,7 +862,7 @@
                 const backups = data.Contents.sort((a, b) => a.LastModified - b.LastModified);
 
                 const toDeleteCount = backups.length - maxBackups;
-                const objectsToDelete = backups.slice(0, toDeleteCount).map(f => ({Key: f.Key}));
+                const objectsToDelete = backups.slice(0, toDeleteCount).map(f => ({ Key: f.Key }));
 
                 if (objectsToDelete.length > 0) {
                     console.log(`Pruning ${objectsToDelete.length} old backups...`);
@@ -963,11 +964,11 @@
         }
 
         async function handleNewFile() {
-            if (await showConfirm('新建文件将清空当前工作区，确定继续吗？', {title: '新建文件', danger: true})) {
+            if (await showConfirm('新建文件将清空当前工作区，确定继续吗？', { title: '新建文件', danger: true })) {
                 state.tabs = [];
                 state.tabCounter = 0;
                 state.activeTabId = null;
-                state.currentFile = {type: 'local', key: null, backupCount: 0};
+                state.currentFile = { type: 'local', key: null, backupCount: 0 };
                 state.lastSavedContent = '';
                 state.lastSaveTime = null;
                 updateSaveTimeDisplay();
@@ -1120,7 +1121,7 @@
         }
 
         async function restoreVersion(backupKey) {
-            if (!await showConfirm('确定要回退到此版本吗？当前内容将自动备份。', {title: '回退确认'})) return;
+            if (!await showConfirm('确定要回退到此版本吗？当前内容将自动备份。', { title: '回退确认' })) return;
 
             try {
                 // 1. Get backup content
@@ -1245,7 +1246,7 @@
                         span.className = `w-8 flex-shrink-0 text-right pr-2 select-none text-[10px] leading-5 ${type === 'removed' ? 'text-red-400 bg-red-50' :
                             type === 'added' ? 'text-green-400 bg-green-50' :
                                 'text-gray-300 bg-gray-50 border-r border-gray-100'
-                        }`;
+                            }`;
                         span.textContent = num || '';
                         return span;
                     };
@@ -1256,7 +1257,7 @@
                         div.className = `flex-1 whitespace-pre-wrap break-all px-2 leading-5 min-h-[1.25rem] font-mono ${type === 'removed' ? 'bg-red-100 text-red-900' :
                             type === 'added' ? 'bg-green-100 text-green-900' :
                                 'text-gray-600'
-                        }`;
+                            }`;
                         div.textContent = text;
                         return div;
                     };
@@ -1318,7 +1319,7 @@
                 tabEl.className = `flex items-center space-x-1 px-3 py-1.5 rounded cursor-pointer transition text-xs select-none ${isActive
                     ? 'bg-white text-primary border-t border-b border-l border-r border-gray-200'
                     : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'
-                }`;
+                    }`;
 
                 tabEl.dataset.tabId = tab.id;
                 tabEl.draggable = true;
@@ -1712,7 +1713,7 @@
             try {
                 state.renderCounter++;
                 const id = `mermaid-${state.renderCounter}`;
-                const {svg} = await mermaid.render(id, code);
+                const { svg } = await mermaid.render(id, code);
                 preview.innerHTML = svg;
 
                 const svgElement = preview.querySelector('svg');
@@ -1722,7 +1723,7 @@
                     svgElement.style.margin = 'auto';
 
                     // Reset Zoom
-                    state.zoom = {level: 1, translateX: 0, translateY: 0};
+                    state.zoom = { level: 1, translateX: 0, translateY: 0 };
                     svgElement.style.transform = 'scale(1) translate(0px, 0px)';
                     svgElement.style.transformOrigin = 'center center';
                     svgElement.style.transition = 'none';
@@ -1814,7 +1815,7 @@
             });
 
             // Wheel
-            preview.addEventListener('wheel', handleWheel, {passive: false});
+            preview.addEventListener('wheel', handleWheel, { passive: false });
             preview.style.cursor = 'grab';
         }
 
@@ -1857,7 +1858,7 @@
         }
 
         function resetZoom() {
-            state.zoom = {level: 1, translateX: 0, translateY: 0};
+            state.zoom = { level: 1, translateX: 0, translateY: 0 };
             applyZoomWithTransition();
             updateZoomButtons();
         }
@@ -1902,7 +1903,7 @@
         }
 
         function updateZoomButtons() {
-            const {level, translateX, translateY} = state.zoom;
+            const { level, translateX, translateY } = state.zoom;
             const isReset = level === 1 && translateX === 0 && translateY === 0;
 
             toggleBtn('zoomInBtn', level >= CONSTANTS.MAX_ZOOM);
@@ -2001,12 +2002,12 @@
                 fo.style.overflow = 'visible';
             });
 
-            return {svg: clonedSvg, width, height};
+            return { svg: clonedSvg, width, height };
         }
 
         async function renderToCanvas(svgElement) {
             // 1. Prepare SVG (Inject Styles, Fix viewBox)
-            const {svg, width, height} = prepareSvgForExport(svgElement);
+            const { svg, width, height } = prepareSvgForExport(svgElement);
             const svgString = new XMLSerializer().serializeToString(svg);
             const svgBase64 = btoa(unescape(encodeURIComponent(svgString)));
             const imgUrl = 'data:image/svg+xml;base64,' + svgBase64;
@@ -2051,7 +2052,7 @@
 
             try {
                 if (format === 'svg') {
-                    const {svg} = prepareSvgForExport(svgElement);
+                    const { svg } = prepareSvgForExport(svgElement);
                     const svgString = new XMLSerializer().serializeToString(svg);
                     await navigator.clipboard.writeText(svgString);
                     showNotification('SVG 代码已复制', 'success');
@@ -2065,7 +2066,7 @@
                 if (!blob) throw new Error("无法生成图片 Blob");
 
                 await navigator.clipboard.write([
-                    new ClipboardItem({[blob.type]: blob})
+                    new ClipboardItem({ [blob.type]: blob })
                 ]);
 
                 showNotification(`图片 (${format.toUpperCase()}) 已复制`, 'success');
@@ -2089,9 +2090,9 @@
                 const filename = `mermaid-diagram-${Date.now()}.${format}`;
 
                 if (format === 'svg') {
-                    const {svg} = prepareSvgForExport(svgElement);
+                    const { svg } = prepareSvgForExport(svgElement);
                     const svgData = new XMLSerializer().serializeToString(svg);
-                    const blob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+                    const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
                     downloadBlob(blob, filename);
                 } else {
                     const canvas = await renderToCanvas(svgElement);
@@ -2150,7 +2151,7 @@
         }
 
         async function clearEditor() {
-            if (await showConfirm('确定要清空当前图表吗?', {title: '清空确认', danger: true})) {
+            if (await showConfirm('确定要清空当前图表吗?', { title: '清空确认', danger: true })) {
                 const editor = document.getElementById('mermaidEditor');
                 editor.value = '';
                 state.currentCode = '';
@@ -2198,7 +2199,7 @@
             notification.className = `fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center space-x-3 transition-all duration-300 transform translate-y-0 opacity-100 ${type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' :
                 type === 'error' ? 'bg-red-50 border border-red-200 text-red-800' :
                     'bg-blue-50 border border-blue-200 text-blue-800'
-            }`;
+                }`;
 
             const icon = document.createElement('i');
             icon.className = type === 'success' ? 'fas fa-check-circle text-green-500' :
@@ -2249,7 +2250,7 @@
             // Check if exists
             try {
                 await remoteStorage.provider.head(targetKey);
-                if (!await showConfirm(`文件 "${filename}" 已存在，确定要覆盖吗？`, {title: '覆盖确认'})) return;
+                if (!await showConfirm(`文件 "${filename}" 已存在，确定要覆盖吗？`, { title: '覆盖确认' })) return;
             } catch (err) {
                 // Not found is good
                 if (err.code !== 'NotFound') {
@@ -2257,7 +2258,7 @@
                 }
             }
 
-            state.currentFile = {type: 's3', key: targetKey};
+            state.currentFile = { type: 's3', key: targetKey };
             closeS3ListModal();
             handleSave(); // Now currentFile is set, it will proceed to save
         }
@@ -2293,7 +2294,7 @@
 
         function downloadExportContent() {
             const content = document.getElementById('exportContent').value;
-            const blob = new Blob([content], {type: 'text/markdown;charset=utf-8'});
+            const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.download = `mermaid-charts-${Date.now()}.md`;
@@ -2371,7 +2372,7 @@
                 if (state.tabs.length === 0) {
                     // Should technically not happen if importedCount > 0, but good for safety
                     state.tabCounter++;
-                    state.tabs.push({id: state.tabCounter, name: '图表 1', code: INITIAL_CODE});
+                    state.tabs.push({ id: state.tabCounter, name: '图表 1', code: INITIAL_CODE });
                 }
 
                 state.activeTabId = state.tabs[state.tabs.length - 1].id;
@@ -2409,7 +2410,7 @@
             const currentTab = state.tabs.find(t => t.id === state.activeTabId);
             if (currentTab) currentTab.code = code;
 
-            loadTabIntoEditor({code});
+            loadTabIntoEditor({ code });
             await saveTabsToDB();
         }
 
@@ -2458,7 +2459,7 @@
             document.getElementById('footerNewBtn').addEventListener('click', handleNewFile);
 
             document.getElementById('themeSelect').addEventListener('change', function () {
-                mermaid.initialize({theme: this.value});
+                mermaid.initialize({ theme: this.value });
                 renderMermaid();
             });
 
@@ -2692,583 +2693,593 @@
 </head>
 
 <body class="bg-gray-50 h-screen overflow-hidden">
-<div class="flex flex-col h-full w-full">
-    <header
+    <div class="flex flex-col h-full w-full">
+        <header
             class="flex-shrink-0 flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200 shadow-sm z-50">
-        <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center space-x-2">
+                    <svg class="w-5 h-5" viewBox="0 0 100 100">
+                        <rect width="100" height="100" rx="15" fill="#6366f1" />
+                        <circle cx="25" cy="30" r="10" fill="white" />
+                        <circle cx="75" cy="30" r="10" fill="white" />
+                        <circle cx="25" cy="70" r="10" fill="white" />
+                        <circle cx="75" cy="70" r="10" fill="white" />
+                        <path d="M35 30 L65 30" stroke="white" stroke-width="3" stroke-linecap="round" />
+                        <path d="M35 70 L65 70" stroke="white" stroke-width="3" stroke-linecap="round" />
+                        <path d="M25 40 L25 60" stroke="white" stroke-width="3" stroke-linecap="round" />
+                        <path d="M75 40 L75 60" stroke="white" stroke-width="3" stroke-linecap="round" />
+                        <path d="M35 40 L65 60" stroke="white" stroke-width="3" stroke-linecap="round" />
+                        <path d="M65 40 L35 60" stroke="white" stroke-width="3" stroke-linecap="round" />
+                    </svg>
+                    <h1 class="text-base font-bold text-gray-800">Mermaid 图表编辑器</h1>
+                </div>
+
+                <div class="flex items-center space-x-3 text-xs">
+                    <div class="flex items-center space-x-1">
+                        <span class="text-gray-500">主题:</span>
+                        <select id="themeSelect"
+                            class="border border-gray-300 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent">
+                            <option value="default">默认</option>
+                            <option value="forest">森林</option>
+                            <option value="dark">暗黑</option>
+                            <option value="neutral">中性</option>
+                        </select>
+                    </div>
+
+                    <div class="flex items-center space-x-1">
+                        <span class="text-gray-500">示例:</span>
+                        <select id="exampleSelect"
+                            class="border border-gray-300 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent">
+                            <option value="flowchart">流程图</option>
+                            <option value="sequence">时序图</option>
+                            <option value="class">类图</option>
+                            <option value="gantt">甘特图</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
             <div class="flex items-center space-x-2">
-                <div
-                        class="w-6 h-6 bg-gradient-to-br from-indigo-500 to-purple-600 rounded flex items-center justify-center">
-                    <span class="text-white font-bold text-xs">M</span>
-                </div>
-                <h1 class="text-base font-bold text-gray-800">Mermaid 图表编辑器</h1>
-            </div>
-
-            <div class="flex items-center space-x-3 text-xs">
-                <div class="flex items-center space-x-1">
-                    <span class="text-gray-500">主题:</span>
-                    <select id="themeSelect"
-                            class="border border-gray-300 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent">
-                        <option value="default">默认</option>
-                        <option value="forest">森林</option>
-                        <option value="dark">暗黑</option>
-                        <option value="neutral">中性</option>
-                    </select>
-                </div>
-
-                <div class="flex items-center space-x-1">
-                    <span class="text-gray-500">示例:</span>
-                    <select id="exampleSelect"
-                            class="border border-gray-300 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent">
-                        <option value="flowchart">流程图</option>
-                        <option value="sequence">时序图</option>
-                        <option value="class">类图</option>
-                        <option value="gantt">甘特图</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-
-        <div class="flex items-center space-x-2">
                 <span class="text-xs text-gray-400">
                     <i class="fas fa-info-circle mr-1"></i>双击标签名称可修改
                 </span>
-            <button id="clearBtn"
+                <button id="clearBtn"
                     class="flex items-center space-x-1 bg-gray-100 hover:bg-red-100 text-gray-700 hover:text-red-700 px-2 py-1 rounded text-xs font-medium transition">
-                <i class="fas fa-trash-alt text-xs"></i>
-                <span>清空</span>
-            </button>
-            <div class="h-4 w-px bg-gray-300"></div>
-            <div class="text-xs text-gray-500">
-                行数: <span id="lineCount" class="font-medium text-gray-700">1</span> | 字符: <span id="charCount"
-                                                                                                    class="font-medium text-gray-700">0</span>
-            </div>
-            <button id="copyBtn"
-                    class="flex items-center space-x-1 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 px-2 py-1 rounded text-xs font-medium transition">
-                <i class="fas fa-copy text-xs"></i>
-                <span>复制代码</span>
-            </button>
-
-            <button id="formatBtn"
-                    class="flex items-center space-x-1 bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-medium transition">
-                <i class="fas fa-code text-xs"></i>
-                <span>格式化</span>
-            </button>
-
-            <button id="copyImageBtn"
-                    class="flex items-center space-x-1 bg-purple-50 hover:bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs font-medium transition">
-                <i class="fas fa-camera text-xs"></i>
-                <span>复制图片</span>
-            </button>
-
-            <button id="exportBtn"
-                    class="flex items-center space-x-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs font-medium transition">
-                <i class="fas fa-download text-xs"></i>
-                <span>导出图片</span>
-            </button>
-            <button id="exportMarkdownBtn"
-                    class="flex items-center space-x-1 bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-medium transition">
-                <i class="fas fa-file-export text-xs"></i>
-                <span>导出MD</span>
-            </button>
-            <button id="importMarkdownBtn"
-                    class="flex items-center space-x-1 bg-orange-50 hover:bg-orange-100 text-orange-700 px-2 py-1 rounded text-xs font-medium transition">
-                <i class="fas fa-file-import text-xs"></i>
-                <span>导入MD</span>
-            </button>
-            <div class="h-4 w-px bg-gray-300"></div>
-            <button id="s3ConfigBtn" title="S3 配置"
-                    class="flex items-center justify-center w-6 h-6 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded transition">
-                <i class="fas fa-cog text-xs"></i>
-            </button>
-            <a href="https://github.com/lizhian/mermaid-tool" target="_blank" title="GitHub 源码"
-               class="flex items-center justify-center w-6 h-6 bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-900 rounded transition">
-                <i class="fab fa-github text-xs"></i>
-            </a>
-        </div>
-    </header>
-
-    <main class="flex flex-1 overflow-hidden relative">
-        <section id="leftPanel" class="flex flex-col border-r border-gray-200 bg-white" style="width: 50%">
-            <div class="flex items-center bg-gray-100 border-b border-gray-200 px-2 py-0.5 h-9">
-                <div id="tabsContainer" class="flex items-center flex-1 space-x-1 overflow-x-auto">
+                    <i class="fas fa-trash-alt text-xs"></i>
+                    <span>清空</span>
+                </button>
+                <div class="h-4 w-px bg-gray-300"></div>
+                <div class="text-xs text-gray-500">
+                    行数: <span id="lineCount" class="font-medium text-gray-700">1</span> | 字符: <span id="charCount"
+                        class="font-medium text-gray-700">0</span>
                 </div>
-                <button id="addTabBtn"
+                <button id="copyBtn"
+                    class="flex items-center space-x-1 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 px-2 py-1 rounded text-xs font-medium transition">
+                    <i class="fas fa-copy text-xs"></i>
+                    <span>复制代码</span>
+                </button>
+
+                <button id="formatBtn"
+                    class="flex items-center space-x-1 bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-medium transition">
+                    <i class="fas fa-code text-xs"></i>
+                    <span>格式化</span>
+                </button>
+
+                <button id="copyImageBtn"
+                    class="flex items-center space-x-1 bg-purple-50 hover:bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs font-medium transition">
+                    <i class="fas fa-camera text-xs"></i>
+                    <span>复制图片</span>
+                </button>
+
+                <button id="exportBtn"
+                    class="flex items-center space-x-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs font-medium transition">
+                    <i class="fas fa-download text-xs"></i>
+                    <span>导出图片</span>
+                </button>
+                <button id="exportMarkdownBtn"
+                    class="flex items-center space-x-1 bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-medium transition">
+                    <i class="fas fa-file-export text-xs"></i>
+                    <span>导出MD</span>
+                </button>
+                <button id="importMarkdownBtn"
+                    class="flex items-center space-x-1 bg-orange-50 hover:bg-orange-100 text-orange-700 px-2 py-1 rounded text-xs font-medium transition">
+                    <i class="fas fa-file-import text-xs"></i>
+                    <span>导入MD</span>
+                </button>
+                <div class="h-4 w-px bg-gray-300"></div>
+                <button id="s3ConfigBtn" title="S3 配置"
+                    class="flex items-center justify-center w-6 h-6 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded transition">
+                    <i class="fas fa-cog text-xs"></i>
+                </button>
+                <a href="https://github.com/lizhian/mermaid-tool" target="_blank" title="GitHub 源码"
+                    class="flex items-center justify-center w-6 h-6 bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-900 rounded transition">
+                    <i class="fab fa-github text-xs"></i>
+                </a>
+            </div>
+        </header>
+
+        <main class="flex flex-1 overflow-hidden relative">
+            <section id="leftPanel" class="flex flex-col border-r border-gray-200 bg-white" style="width: 50%">
+                <div class="flex items-center bg-gray-100 border-b border-gray-200 px-2 py-0.5 h-9">
+                    <div id="tabsContainer" class="flex items-center flex-1 space-x-1 overflow-x-auto">
+                    </div>
+                    <button id="addTabBtn"
                         class="flex items-center justify-center w-6 h-6 ml-2 text-gray-500 hover:text-primary hover:bg-gray-200 rounded transition"
                         title="添加新图表">
-                    <i class="fas fa-plus text-xs"></i>
-                </button>
-            </div>
-
-            <div class="flex flex-1 overflow-hidden relative">
-                <div id="lineNumbers"
-                     class="line-numbers absolute left-0 top-0 bottom-0 w-10 bg-gray-50 border-r border-gray-200 overflow-hidden py-2 px-1 text-right select-none">
+                        <i class="fas fa-plus text-xs"></i>
+                    </button>
                 </div>
 
-                <textarea id="mermaidEditor"
-                          class="code-editor flex-1 pl-11 pr-3 py-2 bg-white resize-none focus:outline-none overflow-auto scrollbar-thin text-xs whitespace-pre"
-                          spellcheck="false"
-                          placeholder="在此输入 Mermaid 代码,例如:&#10;flowchart TD&#10;    A[开始] --> B[结束]"></textarea>
-            </div>
-
-
-            <!-- Footer Status Bar -->
-            <div
-                    class="flex items-center justify-between px-3 py-1.5 bg-white border-t border-gray-200 text-xs h-[33px]">
-                <div class="flex items-center">
-                    <div id="fileStatusDisplay"
-                         class="flex items-center space-x-2 text-gray-600 cursor-pointer hover:bg-gray-100 px-2 py-1 rounded transition"
-                         title="点击切换文件">
-                        <i class="fas fa-hdd"></i>
-                        <span class="font-mono">本地存储</span>
+                <div class="flex flex-1 overflow-hidden relative">
+                    <div id="lineNumbers"
+                        class="line-numbers absolute left-0 top-0 bottom-0 w-10 bg-gray-50 border-r border-gray-200 overflow-hidden py-2 px-1 text-right select-none">
                     </div>
-                    <span id="lastSavedTime" class="text-gray-400 text-[10px] ml-3 hidden sm:inline-block"></span>
+
+                    <textarea id="mermaidEditor"
+                        class="code-editor flex-1 pl-11 pr-3 py-2 bg-white resize-none focus:outline-none overflow-auto scrollbar-thin text-xs whitespace-pre"
+                        spellcheck="false"
+                        placeholder="在此输入 Mermaid 代码,例如:&#10;flowchart TD&#10;    A[开始] --> B[结束]"></textarea>
                 </div>
-                <div class="flex items-center space-x-2">
-                    <span id="autoSaveCountdown" class="text-[10px] text-orange-500 font-mono hidden mr-1"></span>
-                    <button id="footerNewBtn"
+
+
+                <!-- Footer Status Bar -->
+                <div
+                    class="flex items-center justify-between px-3 py-1.5 bg-white border-t border-gray-200 text-xs h-[33px]">
+                    <div class="flex items-center">
+                        <div id="fileStatusDisplay"
+                            class="flex items-center space-x-2 text-gray-600 cursor-pointer hover:bg-gray-100 px-2 py-1 rounded transition"
+                            title="点击切换文件">
+                            <i class="fas fa-hdd"></i>
+                            <span class="font-mono">本地存储</span>
+                        </div>
+                        <span id="lastSavedTime" class="text-gray-400 text-[10px] ml-3 hidden sm:inline-block"></span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span id="autoSaveCountdown" class="text-[10px] text-orange-500 font-mono hidden mr-1"></span>
+                        <button id="footerNewBtn"
                             class="hidden flex items-center space-x-1 text-gray-600 hover:text-primary px-2 py-1 rounded hover:bg-gray-100 transition"
                             title="新建文件">
-                        <i class="fas fa-file-medical"></i>
-                        <span>新建</span>
-                    </button>
-                    <button id="footerSaveBtn"
+                            <i class="fas fa-file-medical"></i>
+                            <span>新建</span>
+                        </button>
+                        <button id="footerSaveBtn"
                             class="hidden flex items-center space-x-1 text-gray-600 hover:text-green-600 px-2 py-1 rounded hover:bg-gray-100 transition"
                             title="保存到云端">
-                        <i class="fas fa-cloud-upload-alt"></i>
-                        <span>保存</span>
-                    </button>
-                </div>
-            </div>
-        </section>
-
-        <div id="resizeHandle"
-             class="resize-handle w-0.5 bg-gray-300 hover:bg-primary cursor-col-resize flex items-center justify-center relative z-10">
-            <div class="w-2 h-8 bg-gray-400 rounded-full opacity-50"></div>
-        </div>
-
-        <section id="rightPanel" class="flex flex-col bg-gray-50 relative" style="width: 50%">
-            <div class="flex items-center justify-between px-3 py-1 border-b border-gray-200 bg-white h-9">
-                <div class="flex items-center space-x-3">
-                    <h2 class="text-xs font-semibold text-gray-700 flex items-center">
-                        <i class="fas fa-chart-bar mr-1 text-primary text-xs"></i>
-                        实时预览
-                    </h2>
-
-                    <div class="zoom-controls">
-                        <button id="zoomOutBtn" class="zoom-btn" title="缩小 (Ctrl + -)">
-                            <i class="fas fa-search-minus text-xs"></i>
-                        </button>
-                        <div class="zoom-separator"></div>
-                        <button id="fitToScreenBtn" class="zoom-btn" title="适应屏幕">
-                            <i class="fas fa-expand text-xs"></i>
-                        </button>
-                        <div class="zoom-separator"></div>
-                        <span class="zoom-percent" id="zoomPercent">100%</span>
-                        <div class="zoom-separator"></div>
-                        <button id="resetZoomBtn" class="zoom-btn" title="重置缩放 (Ctrl + 0)">
-                            <i class="fas fa-refresh text-xs"></i>
-                        </button>
-                        <div class="zoom-separator"></div>
-                        <button id="zoomInBtn" class="zoom-btn" title="放大 (Ctrl + +)">
-                            <i class="fas fa-search-plus text-xs"></i>
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <span>保存</span>
                         </button>
                     </div>
                 </div>
+            </section>
 
-                <div class="flex items-center space-x-2 text-xs text-gray-500">
+            <div id="resizeHandle"
+                class="resize-handle w-0.5 bg-gray-300 hover:bg-primary cursor-col-resize flex items-center justify-center relative z-10">
+                <div class="w-2 h-8 bg-gray-400 rounded-full opacity-50"></div>
+            </div>
+
+            <section id="rightPanel" class="flex flex-col bg-gray-50 relative" style="width: 50%">
+                <div class="flex items-center justify-between px-3 py-1 border-b border-gray-200 bg-white h-9">
+                    <div class="flex items-center space-x-3">
+                        <h2 class="text-xs font-semibold text-gray-700 flex items-center">
+                            <i class="fas fa-chart-bar mr-1 text-primary text-xs"></i>
+                            实时预览
+                        </h2>
+
+                        <div class="zoom-controls">
+                            <button id="zoomOutBtn" class="zoom-btn" title="缩小 (Ctrl + -)">
+                                <i class="fas fa-search-minus text-xs"></i>
+                            </button>
+                            <div class="zoom-separator"></div>
+                            <button id="fitToScreenBtn" class="zoom-btn" title="适应屏幕">
+                                <i class="fas fa-expand text-xs"></i>
+                            </button>
+                            <div class="zoom-separator"></div>
+                            <span class="zoom-percent" id="zoomPercent">100%</span>
+                            <div class="zoom-separator"></div>
+                            <button id="resetZoomBtn" class="zoom-btn" title="重置缩放 (Ctrl + 0)">
+                                <i class="fas fa-refresh text-xs"></i>
+                            </button>
+                            <div class="zoom-separator"></div>
+                            <button id="zoomInBtn" class="zoom-btn" title="放大 (Ctrl + +)">
+                                <i class="fas fa-search-plus text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center space-x-2 text-xs text-gray-500">
                         <span class="flex items-center text-xs">
                             <i class="fas fa-sync-alt mr-1 text-xs"></i>
                             自动更新
                         </span>
-                    <span class="h-3 w-px bg-gray-300"></span>
-                    <span class="text-xs">SVG 渲染</span>
-                    <span class="h-3 w-px bg-gray-300"></span>
-                    <span class="text-xs" title="复制图片快捷键">Ctrl+Shift+C</span>
-                </div>
-            </div>
-
-            <div class="flex-1 overflow-auto p-3 scrollbar-thin">
-                <div id="errorMessage"
-                     class="hidden absolute bottom-4 left-4 right-4 mx-auto max-w-md p-3 bg-red-50/90 backdrop-blur border border-red-200 rounded-lg shadow-lg z-20">
-                    <div class="flex items-start">
-                        <div class="flex-shrink-0">
-                            <i class="fas fa-exclamation-circle text-red-500 text-sm"></i>
-                        </div>
-                        <div class="ml-2 flex-1">
-                            <h3 class="text-xs font-bold text-red-800">语法错误</h3>
-                            <div class="mt-1 text-xs text-red-700 break-words font-mono">
-                                <p id="errorText"></p>
-                            </div>
-                        </div>
-                        <button onclick="document.getElementById('errorMessage').classList.add('hidden')"
-                                class="ml-2 text-red-400 hover:text-red-600">
-                            <i class="fas fa-times text-xs"></i>
-                        </button>
+                        <span class="h-3 w-px bg-gray-300"></span>
+                        <span class="text-xs">SVG 渲染</span>
+                        <span class="h-3 w-px bg-gray-300"></span>
+                        <span class="text-xs" title="复制图片快捷键">Ctrl+Shift+C</span>
                     </div>
                 </div>
 
-                <div id="mermaidPreview" class="min-h-full flex items-center justify-center">
-                    <div class="text-center text-gray-400">
-                        <div class="text-5xl mb-4 opacity-30">📊</div>
-                        <p class="text-lg font-medium text-gray-500">图表预览区域</p>
-                        <p class="text-sm mt-2 text-gray-400 max-w-md mx-auto">在左侧输入 Mermaid 代码,图表将实时显示在此处。Mermaid
-                            支持流程图、时序图、类图、状态图等多种图表类型。</p>
-                        <div class="mt-6 grid grid-cols-2 gap-3 max-w-xs mx-auto">
-                            <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
-                                <div class="font-medium text-gray-700">流程图</div>
-                                <div class="text-gray-500 mt-1">flowchart TD</div>
+                <div class="flex-1 overflow-auto p-3 scrollbar-thin">
+                    <div id="errorMessage"
+                        class="hidden absolute bottom-4 left-4 right-4 mx-auto max-w-md p-3 bg-red-50/90 backdrop-blur border border-red-200 rounded-lg shadow-lg z-20">
+                        <div class="flex items-start">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-exclamation-circle text-red-500 text-sm"></i>
                             </div>
-                            <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
-                                <div class="font-medium text-gray-700">时序图</div>
-                                <div class="text-gray-500 mt-1">sequenceDiagram</div>
+                            <div class="ml-2 flex-1">
+                                <h3 class="text-xs font-bold text-red-800">语法错误</h3>
+                                <div class="mt-1 text-xs text-red-700 break-words font-mono">
+                                    <p id="errorText"></p>
+                                </div>
                             </div>
-                            <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
-                                <div class="font-medium text-gray-700">类图</div>
-                                <div class="text-gray-500 mt-1">classDiagram</div>
-                            </div>
-                            <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
-                                <div class="font-medium text-gray-700">甘特图</div>
-                                <div class="text-gray-500 mt-1">gantt</div>
+                            <button onclick="document.getElementById('errorMessage').classList.add('hidden')"
+                                class="ml-2 text-red-400 hover:text-red-600">
+                                <i class="fas fa-times text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="mermaidPreview" class="min-h-full flex items-center justify-center">
+                        <div class="text-center text-gray-400">
+                            <div class="text-5xl mb-4 opacity-30">📊</div>
+                            <p class="text-lg font-medium text-gray-500">图表预览区域</p>
+                            <p class="text-sm mt-2 text-gray-400 max-w-md mx-auto">在左侧输入 Mermaid 代码,图表将实时显示在此处。Mermaid
+                                支持流程图、时序图、类图、状态图等多种图表类型。</p>
+                            <div class="mt-6 grid grid-cols-2 gap-3 max-w-xs mx-auto">
+                                <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
+                                    <div class="font-medium text-gray-700">流程图</div>
+                                    <div class="text-gray-500 mt-1">flowchart TD</div>
+                                </div>
+                                <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
+                                    <div class="font-medium text-gray-700">时序图</div>
+                                    <div class="text-gray-500 mt-1">sequenceDiagram</div>
+                                </div>
+                                <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
+                                    <div class="font-medium text-gray-700">类图</div>
+                                    <div class="text-gray-500 mt-1">classDiagram</div>
+                                </div>
+                                <div class="p-3 bg-white rounded-lg border border-gray-200 text-xs">
+                                    <div class="font-medium text-gray-700">甘特图</div>
+                                    <div class="text-gray-500 mt-1">gantt</div>
+                                </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <div
+                    class="px-3 py-1 border-t border-gray-200 bg-white text-xs text-gray-500 flex items-center justify-between h-[33px]">
+                    <div class="flex items-center space-x-3">
+                        <span class="flex items-center">
+                            <i class="fas fa-info-circle mr-1 text-xs"></i>
+                            编辑器已就绪
+                        </span>
+                        <span id="renderStatus" class="text-green-600 flex items-center text-xs">
+                            <i class="fas fa-check-circle mr-1 text-xs"></i>
+                            渲染正常
+                        </span>
+                    </div>
+                    <div class="text-xs flex items-center">
+                        <button id="refreshBtn"
+                            class="flex items-center justify-center w-6 h-5 text-gray-500 hover:text-primary hover:bg-gray-200 rounded transition mr-2"
+                            title="刷新图表">
+                            <i class="fas fa-sync-alt text-xs"></i>
+                        </button>
+                        <span id="lastUpdated">最后更新: 刚刚</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="exportModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-800">导出 Markdown</h3>
+                <button id="closeExportModal" class="text-gray-400 hover:text-gray-600 transition">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto p-4">
+                <textarea id="exportContent"
+                    class="w-full h-64 p-3 border border-gray-300 rounded-md text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    readonly></textarea>
+            </div>
+            <div
+                class="flex items-center justify-end space-x-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                <button id="copyExportBtn"
+                    class="flex items-center space-x-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-copy text-xs"></i>
+                    <span>复制</span>
+                </button>
+                <button id="downloadExportBtn"
+                    class="flex items-center space-x-1 bg-primary hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-download text-xs"></i>
+                    <span>下载</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="importModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-800">导入 Markdown</h3>
+                <button id="closeImportModal" class="text-gray-400 hover:text-gray-600 transition">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto p-4">
+                <div class="mb-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    请输入Markdown格式的图表内容，每个图表以"### 标题"开头，代码块使用"```mermaid"包裹
+                </div>
+                <textarea id="importContent"
+                    class="w-full h-64 p-3 border border-gray-300 rounded-md text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    placeholder="### 图表1&#10;```mermaid&#10;flowchart TD&#10;    A[开始] --> B[结束]&#10;```"></textarea>
+            </div>
+            <div
+                class="flex items-center justify-end space-x-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                <button id="cancelImportBtn"
+                    class="flex items-center space-x-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-times text-xs"></i>
+                    <span>取消</span>
+                </button>
+                <button id="appendImportBtn"
+                    class="flex items-center space-x-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-plus text-xs"></i>
+                    <span>增量导入</span>
+                </button>
+                <button id="overrideImportBtn"
+                    class="flex items-center space-x-1 bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
+                    <i class="fas fa-trash-alt text-xs"></i>
+                    <span>覆盖导入</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- S3 Config Modal -->
+    <!-- S3 Configuration Modal -->
+    <div id="s3ConfigModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 flex flex-col max-h-[90vh]">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                <h3 class="text-base font-semibold text-gray-800">系统设置</h3>
+                <button id="closeS3ConfigModal" class="text-gray-400 hover:text-gray-600 transition">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <!-- Left Column: Storage -->
+                    <div class="space-y-4">
+                        <div class="flex items-center space-x-2 text-primary border-b border-gray-100 pb-2 mb-4">
+                            <i class="fas fa-database"></i>
+                            <h4 class="text-sm font-bold uppercase tracking-wider">存储配置 (S3)</h4>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
+                            <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
+                                class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
+                            <input id="s3Region" type="text" placeholder="us-east-1"
+                                class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
+                                    class="text-red-500">*</span></label>
+                            <input id="s3AccessKey" type="text"
+                                class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
+                                    class="text-red-500">*</span></label>
+                            <input id="s3SecretKey" type="password"
+                                class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
+                                    class="text-red-500">*</span></label>
+                            <input id="s3Bucket" type="text"
+                                class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
+                        </div>
+
+                        <div class="text-[10px] text-yellow-700 bg-yellow-50 p-3 rounded border border-yellow-200 mt-4">
+                            <i class="fas fa-shield-alt mr-1"></i> 安全提示：密钥仅保存在您浏览器的 LocalStorage
+                            中，不会发送到任何第三方服务器。
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Preferences -->
+                    <div class="space-y-8">
+
+                        <!-- Backup Settings -->
+                        <div class="space-y-4">
+                            <div class="flex items-center space-x-2 text-secondary border-b border-gray-100 pb-2 mb-4">
+                                <i class="fas fa-history"></i>
+                                <h4 class="text-sm font-bold uppercase tracking-wider">备份策略</h4>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">最大保留版本数</label>
+                                <input id="s3MaxBackups" type="number" min="1" max="100" value="10"
+                                    class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
+                                <p class="text-[10px] text-gray-400 mt-1">超过数量的旧版本将被自动清理</p>
+                            </div>
+
+                            <div class="pt-2">
+                                <div class="flex items-center space-x-2 mb-2">
+                                    <input type="checkbox" id="s3EnableAutoSave"
+                                        class="rounded text-primary focus:ring-primary h-4 w-4"
+                                        onchange="toggleIdleTimeInput(this.checked)">
+                                    <label for="s3EnableAutoSave"
+                                        class="text-xs font-medium text-gray-700 select-none cursor-pointer">启用自动保存</label>
+                                </div>
+
+                                <div id="s3IdleTimeContainer" class="pl-6 hidden transition-all">
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">空闲时间 (分钟)</label>
+                                    <input id="s3IdleTime" type="number" min="1" max="60" value="1"
+                                        class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- UI Settings -->
+                        <div class="space-y-4">
+                            <div class="flex items-center space-x-2 text-accent border-b border-gray-100 pb-2 mb-4">
+                                <i class="fas fa-image"></i>
+                                <h4 class="text-sm font-bold uppercase tracking-wider">导出设置</h4>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">剪贴板复制格式</label>
+                                    <select id="uiCopyFormat"
+                                        class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent bg-white">
+                                        <option value="png">PNG (位图)</option>
+                                        <option value="jpg">JPG (压缩)</option>
+                                        <option value="svg">SVG (矢量)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">文件导出格式</label>
+                                    <select id="uiExportFormat"
+                                        class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent bg-white">
+                                        <option value="png">PNG (位图)</option>
+                                        <option value="jpg">JPG (压缩)</option>
+                                        <option value="svg">SVG (矢量)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
             </div>
 
             <div
-                    class="px-3 py-1 border-t border-gray-200 bg-white text-xs text-gray-500 flex items-center justify-between h-[33px]">
-                <div class="flex items-center space-x-3">
-                        <span class="flex items-center">
-                            <i class="fas fa-info-circle mr-1 text-xs"></i>
-                            编辑器已就绪
-                        </span>
-                    <span id="renderStatus" class="text-green-600 flex items-center text-xs">
-                            <i class="fas fa-check-circle mr-1 text-xs"></i>
-                            渲染正常
-                        </span>
-                </div>
-                <div class="text-xs flex items-center">
-                    <button id="refreshBtn"
-                            class="flex items-center justify-center w-6 h-5 text-gray-500 hover:text-primary hover:bg-gray-200 rounded transition mr-2"
-                            title="刷新图表">
-                        <i class="fas fa-sync-alt text-xs"></i>
-                    </button>
-                    <span id="lastUpdated">最后更新: 刚刚</span>
-                </div>
-            </div>
-        </section>
-    </main>
-</div>
-
-<div id="exportModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
-        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-            <h3 class="text-sm font-semibold text-gray-800">导出 Markdown</h3>
-            <button id="closeExportModal" class="text-gray-400 hover:text-gray-600 transition">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-        <div class="flex-1 overflow-auto p-4">
-                <textarea id="exportContent"
-                          class="w-full h-64 p-3 border border-gray-300 rounded-md text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                          readonly></textarea>
-        </div>
-        <div
-                class="flex items-center justify-end space-x-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-            <button id="copyExportBtn"
-                    class="flex items-center space-x-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-xs font-medium transition">
-                <i class="fas fa-copy text-xs"></i>
-                <span>复制</span>
-            </button>
-            <button id="downloadExportBtn"
-                    class="flex items-center space-x-1 bg-primary hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
-                <i class="fas fa-download text-xs"></i>
-                <span>下载</span>
-            </button>
-        </div>
-    </div>
-</div>
-
-<div id="importModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
-        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-            <h3 class="text-sm font-semibold text-gray-800">导入 Markdown</h3>
-            <button id="closeImportModal" class="text-gray-400 hover:text-gray-600 transition">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-        <div class="flex-1 overflow-auto p-4">
-            <div class="mb-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-                <i class="fas fa-info-circle mr-1"></i>
-                请输入Markdown格式的图表内容，每个图表以"### 标题"开头，代码块使用"```mermaid"包裹
-            </div>
-            <textarea id="importContent"
-                      class="w-full h-64 p-3 border border-gray-300 rounded-md text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                      placeholder="### 图表1&#10;```mermaid&#10;flowchart TD&#10;    A[开始] --> B[结束]&#10;```"></textarea>
-        </div>
-        <div
-                class="flex items-center justify-end space-x-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-            <button id="cancelImportBtn"
-                    class="flex items-center space-x-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-xs font-medium transition">
-                <i class="fas fa-times text-xs"></i>
-                <span>取消</span>
-            </button>
-            <button id="appendImportBtn"
-                    class="flex items-center space-x-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
-                <i class="fas fa-plus text-xs"></i>
-                <span>增量导入</span>
-            </button>
-            <button id="overrideImportBtn"
-                    class="flex items-center space-x-1 bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs font-medium transition">
-                <i class="fas fa-trash-alt text-xs"></i>
-                <span>覆盖导入</span>
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- S3 Config Modal -->
-<!-- S3 Configuration Modal -->
-<div id="s3ConfigModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 flex flex-col max-h-[90vh]">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-            <h3 class="text-base font-semibold text-gray-800">系统设置</h3>
-            <button id="closeS3ConfigModal" class="text-gray-400 hover:text-gray-600 transition">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-
-        <div class="flex-1 overflow-y-auto p-6">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <!-- Left Column: Storage -->
-                <div class="space-y-4">
-                    <div class="flex items-center space-x-2 text-primary border-b border-gray-100 pb-2 mb-4">
-                        <i class="fas fa-database"></i>
-                        <h4 class="text-sm font-bold uppercase tracking-wider">存储配置 (S3)</h4>
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Endpoint (可选)</label>
-                        <input id="s3Endpoint" type="text" placeholder="https://s3.amazonaws.com"
-                               class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Region (可选)</label>
-                        <input id="s3Region" type="text" placeholder="us-east-1"
-                               class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Access Key ID <span
-                                class="text-red-500">*</span></label>
-                        <input id="s3AccessKey" type="text"
-                               class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Secret Access Key <span
-                                class="text-red-500">*</span></label>
-                        <input id="s3SecretKey" type="password"
-                               class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Bucket Name <span
-                                class="text-red-500">*</span></label>
-                        <input id="s3Bucket" type="text"
-                               class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
-                    </div>
-
-                    <div class="text-[10px] text-yellow-700 bg-yellow-50 p-3 rounded border border-yellow-200 mt-4">
-                        <i class="fas fa-shield-alt mr-1"></i> 安全提示：密钥仅保存在您浏览器的 LocalStorage
-                        中，不会发送到任何第三方服务器。
-                    </div>
-                </div>
-
-                <!-- Right Column: Preferences -->
-                <div class="space-y-8">
-
-                    <!-- Backup Settings -->
-                    <div class="space-y-4">
-                        <div class="flex items-center space-x-2 text-secondary border-b border-gray-100 pb-2 mb-4">
-                            <i class="fas fa-history"></i>
-                            <h4 class="text-sm font-bold uppercase tracking-wider">备份策略</h4>
-                        </div>
-
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">最大保留版本数</label>
-                            <input id="s3MaxBackups" type="number" min="1" max="100" value="10"
-                                   class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
-                            <p class="text-[10px] text-gray-400 mt-1">超过数量的旧版本将被自动清理</p>
-                        </div>
-
-                        <div class="pt-2">
-                            <div class="flex items-center space-x-2 mb-2">
-                                <input type="checkbox" id="s3EnableAutoSave"
-                                       class="rounded text-primary focus:ring-primary h-4 w-4"
-                                       onchange="toggleIdleTimeInput(this.checked)">
-                                <label for="s3EnableAutoSave"
-                                       class="text-xs font-medium text-gray-700 select-none cursor-pointer">启用自动保存</label>
-                            </div>
-
-                            <div id="s3IdleTimeContainer" class="pl-6 hidden transition-all">
-                                <label class="block text-xs font-medium text-gray-700 mb-1">空闲时间 (分钟)</label>
-                                <input id="s3IdleTime" type="number" min="1" max="60" value="1"
-                                       class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent transition-shadow">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- UI Settings -->
-                    <div class="space-y-4">
-                        <div class="flex items-center space-x-2 text-accent border-b border-gray-100 pb-2 mb-4">
-                            <i class="fas fa-image"></i>
-                            <h4 class="text-sm font-bold uppercase tracking-wider">导出设置</h4>
-                        </div>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">剪贴板复制格式</label>
-                                <select id="uiCopyFormat"
-                                        class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent bg-white">
-                                    <option value="png">PNG (位图)</option>
-                                    <option value="jpg">JPG (压缩)</option>
-                                    <option value="svg">SVG (矢量)</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">文件导出格式</label>
-                                <select id="uiExportFormat"
-                                        class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent bg-white">
-                                    <option value="png">PNG (位图)</option>
-                                    <option value="jpg">JPG (压缩)</option>
-                                    <option value="svg">SVG (矢量)</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-        </div>
-
-        <div class="flex items-center justify-end space-x-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-            <button onclick="document.getElementById('closeS3ConfigModal').click()"
+                class="flex items-center justify-end space-x-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                <button onclick="document.getElementById('closeS3ConfigModal').click()"
                     class="px-4 py-2 border border-gray-300 rounded text-xs text-gray-600 hover:bg-white hover:shadow-sm transition font-medium">
-                取消
-            </button>
-            <button id="saveS3ConfigBtn"
+                    取消
+                </button>
+                <button id="saveS3ConfigBtn"
                     class="flex items-center space-x-2 bg-primary hover:bg-indigo-700 text-white px-6 py-2 rounded text-xs font-medium transition shadow-sm hover:shadow">
-                <i class="fas fa-check"></i>
-                <span>保存配置</span>
-            </button>
+                    <i class="fas fa-check"></i>
+                    <span>保存配置</span>
+                </button>
+            </div>
         </div>
     </div>
-</div>
 
-<!-- S3 File List Modal -->
-<div id="s3ListModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden">
-        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-            <div class="flex flex-col">
-                <h3 class="text-sm font-semibold text-gray-800">云端文件</h3>
-                <div id="s3Breadcrumbs" class="text-xs text-gray-500 mt-1 flex items-center space-x-1"></div>
-            </div>
-            <div class="flex items-center space-x-2">
-                <button class="text-gray-500 hover:text-primary p-1 rounded transition" title="新建文件夹"
+    <!-- S3 File List Modal -->
+    <div id="s3ListModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <div class="flex flex-col">
+                    <h3 class="text-sm font-semibold text-gray-800">云端文件</h3>
+                    <div id="s3Breadcrumbs" class="text-xs text-gray-500 mt-1 flex items-center space-x-1"></div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button class="text-gray-500 hover:text-primary p-1 rounded transition" title="新建文件夹"
                         onclick="createS3Folder()">
-                    <i class="fas fa-folder-plus"></i>
-                </button>
-                <button id="closeS3ListModal" class="text-gray-400 hover:text-gray-600 transition">
-                    <i class="fas fa-times"></i>
-                </button>
+                        <i class="fas fa-folder-plus"></i>
+                    </button>
+                    <button id="closeS3ListModal" class="text-gray-400 hover:text-gray-600 transition">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
             </div>
-        </div>
-        <div class="flex-1 overflow-auto" id="s3FileList">
-            <!-- File items will be injected here -->
+            <div class="flex-1 overflow-auto" id="s3FileList">
+                <!-- File items will be injected here -->
+            </div>
         </div>
     </div>
-</div>
 
-<!-- Diff Modal (Side-by-Side) -->
-<div id="diffModal"
-     class="fixed inset-0 bg-black bg-opacity-50 z-[60] hidden flex items-center justify-center backdrop-blur-sm">
-    <div class="bg-white rounded-lg shadow-2xl w-[95vw] h-[85vh] flex flex-col mx-4 overflow-hidden">
-        <!-- Header -->
-        <div class="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
-            <div class="flex items-center space-x-4">
-                <h3 class="font-bold text-gray-800 text-sm">版本对比</h3>
-                <label class="flex items-center space-x-2 text-xs text-gray-600 cursor-pointer select-none">
-                    <input type="checkbox" id="diffOnlyCheck" class="rounded text-primary focus:ring-primary"
-                           checked>
-                    <span>只显示差异内容</span>
-                </label>
-            </div>
-            <div class="space-x-2">
-                <button onclick="closeDiffModal()"
+    <!-- Diff Modal (Side-by-Side) -->
+    <div id="diffModal"
+        class="fixed inset-0 bg-black bg-opacity-50 z-[60] hidden flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white rounded-lg shadow-2xl w-[95vw] h-[85vh] flex flex-col mx-4 overflow-hidden">
+            <!-- Header -->
+            <div class="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
+                <div class="flex items-center space-x-4">
+                    <h3 class="font-bold text-gray-800 text-sm">版本对比</h3>
+                    <label class="flex items-center space-x-2 text-xs text-gray-600 cursor-pointer select-none">
+                        <input type="checkbox" id="diffOnlyCheck" class="rounded text-primary focus:ring-primary"
+                            checked>
+                        <span>只显示差异内容</span>
+                    </label>
+                </div>
+                <div class="space-x-2">
+                    <button onclick="closeDiffModal()"
                         class="text-gray-500 hover:text-gray-700 hover:bg-gray-200 px-2 py-1 rounded transition">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-        </div>
-        <!-- Diff Content -->
-        <div class="flex-1 overflow-hidden flex text-xs font-mono relative bg-white">
-            <!-- Left: Backup -->
-            <div class="w-1/2 border-r border-gray-200 flex flex-col">
-                <div
-                        class="flex-shrink-0 px-2 py-1 bg-gray-100 border-b border-gray-200 font-semibold text-center text-gray-600 text-[10px] uppercase tracking-wider">
-                    备份版本 (旧)
+                        <i class="fas fa-times"></i>
+                    </button>
                 </div>
-                <div id="diffLeft" class="flex-1 overflow-auto"></div>
             </div>
-            <!-- Right: Current -->
-            <div class="w-1/2 flex flex-col">
-                <div
+            <!-- Diff Content -->
+            <div class="flex-1 overflow-hidden flex text-xs font-mono relative bg-white">
+                <!-- Left: Backup -->
+                <div class="w-1/2 border-r border-gray-200 flex flex-col">
+                    <div
                         class="flex-shrink-0 px-2 py-1 bg-gray-100 border-b border-gray-200 font-semibold text-center text-gray-600 text-[10px] uppercase tracking-wider">
-                    当前版本 (新)
+                        备份版本 (旧)
+                    </div>
+                    <div id="diffLeft" class="flex-1 overflow-auto"></div>
                 </div>
-                <div id="diffRight" class="flex-1 overflow-auto"></div>
+                <!-- Right: Current -->
+                <div class="w-1/2 flex flex-col">
+                    <div
+                        class="flex-shrink-0 px-2 py-1 bg-gray-100 border-b border-gray-200 font-semibold text-center text-gray-600 text-[10px] uppercase tracking-wider">
+                        当前版本 (新)
+                    </div>
+                    <div id="diffRight" class="flex-1 overflow-auto"></div>
+                </div>
             </div>
         </div>
     </div>
-</div>
-<!-- Custom Confirm Modal -->
-<div id="customConfirmModal"
-     class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden">
-    <div class="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 overflow-hidden transform transition-all">
-        <div class="px-4 py-4">
-            <h3 id="confirmTitle" class="text-sm font-semibold text-gray-900 mb-2">确认</h3>
-            <p id="confirmMessage" class="text-xs text-gray-600 mb-4"></p>
-            <div class="flex justify-end space-x-2">
-                <button id="confirmCancelBtn"
+    <!-- Custom Confirm Modal -->
+    <div id="customConfirmModal"
+        class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 overflow-hidden transform transition-all">
+            <div class="px-4 py-4">
+                <h3 id="confirmTitle" class="text-sm font-semibold text-gray-900 mb-2">确认</h3>
+                <p id="confirmMessage" class="text-xs text-gray-600 mb-4"></p>
+                <div class="flex justify-end space-x-2">
+                    <button id="confirmCancelBtn"
                         class="px-3 py-1.5 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-50 transition">
-                    取消
-                </button>
-                <button id="confirmOkBtn"
+                        取消
+                    </button>
+                    <button id="confirmOkBtn"
                         class="px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition">确定
-                </button>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
-</div>
 
-<!-- Custom Prompt Modal -->
-<div id="customPromptModal"
-     class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden">
-    <div class="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 overflow-hidden transform transition-all">
-        <div class="px-4 py-4">
-            <h3 id="promptTitle" class="text-sm font-semibold text-gray-900 mb-2">输入</h3>
-            <input id="promptInput" type="text"
-                   class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent mb-4"/>
-            <div class="flex justify-end space-x-2">
-                <button id="promptCancelBtn"
+    <!-- Custom Prompt Modal -->
+    <div id="customPromptModal"
+        class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-sm w-full mx-4 overflow-hidden transform transition-all">
+            <div class="px-4 py-4">
+                <h3 id="promptTitle" class="text-sm font-semibold text-gray-900 mb-2">输入</h3>
+                <input id="promptInput" type="text"
+                    class="w-full border border-gray-300 rounded px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:border-transparent mb-4" />
+                <div class="flex justify-end space-x-2">
+                    <button id="promptCancelBtn"
                         class="px-3 py-1.5 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-50 transition">
-                    取消
-                </button>
-                <button id="promptOkBtn"
+                        取消
+                    </button>
+                    <button id="promptOkBtn"
                         class="px-3 py-1.5 bg-primary text-white rounded text-xs hover:bg-indigo-700 transition">确定
-                </button>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
-</div>
 </body>
 
 </html>
